@@ -45,6 +45,7 @@ namespace GeminiLauncher
             SearchBox.SelectionChanged += (s, e) => UpdateGhost();
             PreviewKeyDown += OnKey;
             PreviewTextInput += OnTextInput;
+            Closing += (s, e) => { if (!App.IsExiting) { e.Cancel = true; AppRef.HideLauncher(); } };
             Deactivated += (s, e) => { if (!SuppressHide && IsVisible) AppRef.HideLauncher(); };
             SourceInitialized += (s, e) =>
             {

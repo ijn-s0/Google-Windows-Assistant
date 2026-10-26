@@ -12,6 +12,7 @@ namespace GeminiLauncher
     public partial class App : Application
     {
         public Settings Settings { get; private set; }
+        public static bool IsExiting;
         public MainWindow Launcher { get; private set; }
         InputHook _hook;
         WinForms.NotifyIcon _tray;
@@ -266,6 +267,7 @@ namespace GeminiLauncher
 
         public void ExitApp()
         {
+            IsExiting = true;
             try { _hook?.Dispose(); } catch { }
             if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
             Shutdown();
@@ -273,6 +275,7 @@ namespace GeminiLauncher
 
         protected override void OnExit(ExitEventArgs e)
         {
+            IsExiting = true;
             try { _hook?.Dispose(); } catch { }
             if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
             base.OnExit(e);
