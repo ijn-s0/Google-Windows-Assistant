@@ -1,6 +1,9 @@
 name: build-and-test
+permissions:
+  contents: write
 on:
   push:
+    branches: [main]
   workflow_dispatch:
 jobs:
   build:
@@ -48,9 +51,23 @@ jobs:
             RunShot "calc-$m" @('--portable', '--query', '"(12+8)*3"')
           }
           RunShot "settings" @('--portable')
+          $p = Start-Process $exe -ArgumentList @('--portable','--background') -PassThru
+          Start-Sleep 40
+          "idle-background: WorkingSet={0:N0} KB  Private={1:N0} KB" -f ($p.WorkingSet64/1KB), ($p.PrivateMemorySize64/1KB) | Write-Host
+          Stop-Process $p -Force -ErrorAction SilentlyContinue
           $log = "$env:APPDATA\GeminiLauncher\error.log"
           if (Test-Path $log) { Write-Host "---- error.log ----"; Get-Content $log; Copy-Item $log shots/ }
           Get-ChildItem shots | Format-Table Name, Length
+      - name: Push screenshots to a branch
+        shell: pwsh
+        run: |
+          git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
+          $br = "ci-shots-${{ matrix.os }}"
+          git checkout --orphan $br
+          git rm -rf --cached . | Out-Null
+          git add -f shots
+          git commit -m "screenshots ${{ github.sha }}" | Out-Null
+          git push -f origin "HEAD:refs/heads/$br"
       - uses: actions/upload-artifact@v4
         with:
           name: shots-${{ matrix.os }}

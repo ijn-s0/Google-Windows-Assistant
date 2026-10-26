@@ -79,7 +79,8 @@ namespace GeminiLauncher
             SetupTray();
 
             _trimTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
-            _trimTimer.Tick += (s, a) => { _trimTimer.Stop(); TrimMemory(); };
+            _trimTimer.Tick += (s, a) => { _trimTimer.Stop(); if (Launcher == null || !Launcher.IsVisible) TrimMemory(); };
+            _trimTimer.Start(); // also trim shortly after a background start
 
             // Command line: --show opens the launcher, --query "text" opens it with a search typed in.
             int qi = Array.FindIndex(e.Args, a => a.Equals("--query", StringComparison.OrdinalIgnoreCase));
