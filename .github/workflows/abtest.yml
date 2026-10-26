@@ -1,0 +1,52 @@
+name: abtest
+permissions:
+  contents: write
+  actions: read
+on:
+  push:
+    branches: [arena/912b55e1-gemini-launcher]
+  workflow_dispatch:
+jobs:
+  ab:
+    runs-on: windows-2025
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build NEW code
+        run: dotnet build src/GeminiLauncher.csproj -c Release
+      - name: Download OLD (bec8170) build artifact
+        shell: pwsh
+        run: gh run download 40301648580 -n GeminiLauncher-exe -D oldexe
+      - name: A/B test
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ab | Out-Null
+          $out = New-Object System.Collections.Generic.List[string]
+          function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
+          function Run-One($exe, $tag) {
+            if (-not (Test-Path $exe)) { Log-Line "$tag : exe missing ($exe)"; return }
+            Remove-Item "$env:APPDATA\GeminiLauncher\error.log" -ErrorAction SilentlyContinue
+            $p = Start-Process $exe -ArgumentList @('--portable', '--query', '"weather vancouver"') -PassThru
+            $seen = 0
+            for ($i = 0; $i -lt 24; $i++) {
+              Start-Sleep -Milliseconds 500
+              if (@(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count -gt 0) { $seen++ }
+            }
+            Log-Line "$tag : wv2-samples=$seen/24 appExited=$($p.HasExited)"
+            $log = "$env:APPDATA\GeminiLauncher\error.log"
+            if (Test-Path $log) { Log-Line "--- $tag error.log ---"; Get-Content $log | Select-Object -First 8 | ForEach-Object { Log-Line $_ } }
+            Stop-Process $p -Force -ErrorAction SilentlyContinue
+            Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep 2
+          }
+          Run-One "src\bin\Release\net48\GeminiLauncher.exe" "NEW"
+          Run-One "oldexe\GeminiLauncher.exe" "OLD"
+          $out | Set-Content ab\ab-result.txt
+      - name: Publish result to a branch
+        shell: pwsh
+        run: |
+          git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
+          git add -f ab/ab-result.txt
+          git commit -m "ab result" | Out-Null
+          git push -f origin "HEAD:refs/heads/ci-ab-result"
