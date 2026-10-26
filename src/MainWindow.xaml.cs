@@ -47,6 +47,9 @@ namespace GeminiLauncher
         string _googleQuery;
         bool _expanded;               // full-size Google page: list hidden, window enlarged
         const double CompactW = 800, CompactH = 620;
+        /// <summary>Google results are the web preview, unless this PC can't show them (no WebView2 Runtime).</summary>
+        bool GoogleFirst => S.GoogleFirst && GoogleView.RuntimeAvailable != false;
+        static bool GoogleUnavailable => GoogleView.RuntimeAvailable == false;
 
         public MainWindow()
         {
@@ -96,10 +99,11 @@ namespace GeminiLauncher
             _google = new GoogleView(GoogleHost);
             _google.SetDark(Theme.IsDark);
             _google.StatusChanged += st => GoogleStatus.Text = st ?? "";
-            _google.Failed += UpdateGoogleMessage;
+            _google.Failed += () => { UpdateGoogleMessage(); UpdateFooter(); };
             _google.OpenExternal += url => { Launcher.OpenUrl(url); AppRef.HideLauncher(); };
             _google.EscapePressed += () => FocusSearch();
             IsVisibleChanged += (s, e) => { if (!IsVisible && !_prewarming) _google.Sleep(); };
+            Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(GoogleView.CheckRuntime));
         }
 
         public void UpdateModelBadge()
@@ -114,6 +118,7 @@ namespace GeminiLauncher
             _answerCts?.Cancel();
             Unbind();
             SetExpanded(false);
+            GoogleView.CheckRuntime();   // quick (no browser starts): picks up a runtime installed since last time
             SearchBox.Text = "";
             ShowHome();
             RefreshHome();
@@ -308,6 +313,8 @@ namespace GeminiLauncher
             if (ResultsView.Visibility != Visibility.Visible) return;
             if (_expanded)
                 FooterHint.Text = "Click a result to open it in your browser  ·  Esc back to the list  ·  Ctrl+Enter open in browser";
+            else if (GooglePanel.Visibility == Visibility.Visible && _google.FailMessage != null)
+                FooterHint.Text = "↑↓ move  ·  Enter open Google in your browser  ·  Tab complete  ·  Right-click for more";
             else if (GooglePanel.Visibility == Visibility.Visible)
                 FooterHint.Text = "↑↓ move  ·  Enter full page  ·  Ctrl+Enter open in browser  ·  Tab complete  ·  Right-click for more";
             else
@@ -446,7 +453,7 @@ namespace GeminiLauncher
                 return;
             }
             ShowResults();
-            if (S.GoogleFirst) _google.Prepare();   // start the browser while the first letters are typed
+            if (GoogleFirst) _google.Prepare();   // start the browser while the first letters are typed
             _ver++;
             int v = _ver;
             _cts?.Cancel();
@@ -583,10 +590,11 @@ namespace GeminiLauncher
             // ...then the web: Gemini + Google suggestions (fewer when there are local results)
             items.Add(ResultItem.Header("Search the web"));
             var gem = new ResultItem { Kind = ItemKind.Gemini, Title = q, Target = q, Glyph = Glyphs.Sparkle, Subtitle = "Ask Gemini  ·  answers grounded in Google Search" };
-            var goo = new ResultItem { Kind = ItemKind.GoogleSearch, Title = q, Target = q, Glyph = Glyphs.Globe, Subtitle = "Google results  ·  right here, Enter for full page" };
-            if (S.GoogleFirst) { items.Add(goo); items.Add(gem); }
+            var goo = new ResultItem { Kind = ItemKind.GoogleSearch, Title = q, Target = q, Glyph = Glyphs.Globe,
+                Subtitle = GoogleUnavailable ? "Search Google  ·  opens in your browser" : "Google results  ·  right here, Enter for full page" };
+            if (GoogleFirst) { items.Add(goo); items.Add(gem); }
             else { items.Add(gem); items.Add(goo); }
-            if (def == null) def = S.GoogleFirst ? goo : gem;
+            if (def == null) def = GoogleFirst ? goo : gem;
             if (_expanded) { def = goo; _userNavigated = false; }   // full-size page follows what you type
             foreach (var s in _sugs.Where(s => !string.Equals(s.Trim(), q, StringComparison.OrdinalIgnoreCase)).Take(anyLocal ? 3 : 6))
                 items.Add(new ResultItem { Kind = ItemKind.Suggestion, Title = s, Target = s, Glyph = Glyphs.Search });
@@ -669,7 +677,7 @@ namespace GeminiLauncher
         {
             var it = Selected;
             if (it == null) { AnswerPanel.Visibility = DetailPanel.Visibility = GooglePanel.Visibility = Visibility.Collapsed; _google.Cancel(); UpdateFooter(); return; }
-            if (it.Kind == ItemKind.GoogleSearch || (it.Kind == ItemKind.Suggestion && S.GoogleFirst))
+            if (it.Kind == ItemKind.GoogleSearch || (it.Kind == ItemKind.Suggestion && GoogleFirst))
                 ShowGoogleFor(it.Target, _userNavigated ? 150 : 400);
             else if (it.Kind == ItemKind.Gemini || it.Kind == ItemKind.Suggestion) ShowAnswerFor(it.Target, false);
             else ShowDetail(it);
@@ -715,7 +723,7 @@ namespace GeminiLauncher
         void SetExpanded(bool on)
         {
             if (_expanded == on) return;
-            if (on && _google.FailMessage != null) return;
+            if (on && (_google.FailMessage != null || GoogleUnavailable)) return;
             _expanded = on;
             ListColumn.Width = new GridLength(on ? 0 : 320);
             GapColumn.Width = new GridLength(on ? 0 : 14);
@@ -1032,7 +1040,7 @@ namespace GeminiLauncher
                 case ItemKind.Suggestion:
                 case ItemKind.Recent:
                 case ItemKind.Trending:
-                    l.Add(("Ask Gemini", () => { if (it.Kind == ItemKind.Suggestion && S.GoogleFirst) AskGemini(it.Target); else Execute(it); }));
+                    l.Add(("Ask Gemini", () => { if (it.Kind == ItemKind.Suggestion && GoogleFirst) AskGemini(it.Target); else Execute(it); }));
                     if (!tile && ResultsView.Visibility == Visibility.Visible)
                         l.Add(("Show Google results here", () => { S.AddRecentSearch(it.Target); ShowGoogleInPane(it.Target); }));
                     l.Add(("Search on Google in browser", () => { Launcher.GoogleSearch(it.Target); S.AddRecentSearch(it.Target); AppRef.HideLauncher(); }));
@@ -1330,7 +1338,7 @@ namespace GeminiLauncher
                     }
                 case ItemKind.GoogleSearch:
                     S.AddRecentSearch(it.Target);
-                    if (!_expanded && _google.FailMessage == null)
+                    if (!_expanded && _google.FailMessage == null && !GoogleUnavailable)
                     {
                         if (GooglePanel.Visibility != Visibility.Visible) ShowGoogleFor(it.Target, 0);
                         SetExpanded(true);   // Enter: full-size page
@@ -1361,7 +1369,7 @@ namespace GeminiLauncher
 
         void SetQueryAndAsk(string text)
         {
-            if (S.GoogleFirst)
+            if (GoogleFirst)
             {
                 // Picking a suggestion / recent / trending search shows its Google results.
                 SearchBox.Text = text;

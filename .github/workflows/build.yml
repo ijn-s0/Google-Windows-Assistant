@@ -87,6 +87,11 @@ jobs:
             RunShot "calc-$m" @('--portable', '--query', '"(12+8)*3"')
           }
           RunShot "settings" @('--portable')
+          # PC without the WebView2 Runtime: Gemini comes first, the Google row opens the browser
+          $env:GEMINILAUNCHER_NO_WEBVIEW2 = '1'
+          RunShot "no-webview2-web" @('--portable', '--query', '"weather vancouver"')
+          RunShot "no-webview2-google-row" @('--portable', '--query', '"weather vancouver"') 9 '{DOWN}'
+          Remove-Item Env:GEMINILAUNCHER_NO_WEBVIEW2
           # Turn on "Animate controls and elements inside windows" (off by default on Windows Server)
           Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint a, uint b, IntPtr c, uint d);'
           [W.U]::SystemParametersInfo(0x1043, 0, [IntPtr]1, 3) | Out-Null

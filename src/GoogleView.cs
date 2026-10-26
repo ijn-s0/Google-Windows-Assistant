@@ -1,5 +1,8 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
@@ -56,12 +59,77 @@ namespace GeminiLauncher
             _release.Tick += (s, e) => { _release.Stop(); Release(); };
         }
 
+        /// <summary>false = no WebView2 Runtime on this PC (checked by <see cref="CheckRuntime"/>), null = not checked yet.</summary>
+        public static bool? RuntimeAvailable { get; private set; }
+
+        /// <summary>Optional portable runtime ("Fixed Version" from Microsoft, extracted here): used instead of an installed one.</summary>
+        public static string FixedRuntimeRoot => Path.Combine(WebView2Deps.DataRoot, "WebView2Runtime");
+
+        const string MissingMessage =
+            "Google results need the Microsoft Edge WebView2 Runtime, and it isn't on this PC. It's separate from the Edge browser: " +
+            "installing it doesn't bring Edge back. Until then, Enter opens Google in your browser.";
+
+        static void EnsureLoader()
+        {
+            if (_loaderSet) return;
+            CoreWebView2Environment.SetLoaderDllFolderPath(WebView2Deps.LoaderFolder());
+            _loaderSet = true;
+        }
+
+        static string FindFixedRuntime()
+        {
+            try
+            {
+                var root = FixedRuntimeRoot;
+                if (!Directory.Exists(root)) return null;
+                if (File.Exists(Path.Combine(root, "msedgewebview2.exe"))) return root;
+                // Microsoft's package extracts to a versioned subfolder (Microsoft.WebView2.FixedVersionRuntime.<ver>.<arch>)
+                return Directory.GetDirectories(root).OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault(d => File.Exists(Path.Combine(d, "msedgewebview2.exe")));
+            }
+            catch { return null; }
+        }
+
+        /// <summary>The browser's sandboxed processes need read access to a portable runtime folder.</summary>
+        static void GrantSandboxAccess(string dir)
+        {
+            try
+            {
+                var di = new DirectoryInfo(FixedRuntimeRoot);
+                var acl = di.GetAccessControl();
+                foreach (var sid in new[] { "S-1-15-2-1" /*ALL APPLICATION PACKAGES*/, "S-1-15-2-2" /*ALL RESTRICTED APPLICATION PACKAGES*/ })
+                    acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(sid), FileSystemRights.ReadAndExecute,
+                        InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+                di.SetAccessControl(acl);
+            }
+            catch (Exception ex) { App.LogError(ex); }
+        }
+
+        /// <summary>Cheap check (no browser is started) whether Google results can be shown on this PC.</summary>
+        public static void CheckRuntime()
+        {
+            if (Environment.GetEnvironmentVariable("GEMINILAUNCHER_NO_WEBVIEW2") == "1") { RuntimeAvailable = false; return; }   // for testing
+            try
+            {
+                EnsureLoader();
+                var v = CoreWebView2Environment.GetAvailableBrowserVersionString(FindFixedRuntime());
+                RuntimeAvailable = !string.IsNullOrEmpty(v);
+            }
+            catch (WebView2RuntimeNotFoundException) { RuntimeAvailable = false; }
+            catch (Exception ex) { App.LogError(ex); RuntimeAvailable = null; }
+        }
+
         public static string SearchUrl(string q) => "https://www.google.com/search?q=" + Uri.EscapeDataString(q ?? "");
 
         /// <summary>Starts the browser in the background (no page yet) so the first search shows up fast.</summary>
         public void Prepare()
         {
             _release.Stop();
+            if (RuntimeAvailable == false && _wv == null)
+            {
+                if (FailMessage == null) { FailMessage = MissingMessage; RuntimeMissing = true; Failed?.Invoke(); }
+                return;
+            }
             if (_wv == null && FailMessage == null && _init == null) _init = InitAsync();
             else if (_ready) Wake();
         }
@@ -190,9 +258,8 @@ namespace GeminiLauncher
                 var wv = _wv; _wv = null; _ready = false; _init = null;
                 if (wv != null) { _host.Children.Remove(wv); try { wv.Dispose(); } catch { } }
                 RuntimeMissing = ex is WebView2RuntimeNotFoundException || ex.GetType().Name == "WebView2RuntimeNotFoundException";
-                FailMessage = RuntimeMissing
-                    ? "Google results need the Microsoft Edge WebView2 Runtime. It's built into Windows 11 and most Windows 10 PCs, but it isn't installed here."
-                    : "Couldn't start the built-in browser: " + ex.Message;
+                if (RuntimeMissing) RuntimeAvailable = false;
+                FailMessage = RuntimeMissing ? MissingMessage : "Couldn't start the built-in browser: " + ex.Message;
                 App.LogError(ex);
                 StatusChanged?.Invoke("");
                 Failed?.Invoke();
@@ -206,14 +273,12 @@ namespace GeminiLauncher
         // Kept separate so the WebView2 assemblies only load once Google results are actually used.
         async Task CreateAsync(int gen)
         {
-            if (!_loaderSet)
-            {
-                CoreWebView2Environment.SetLoaderDllFolderPath(WebView2Deps.LoaderFolder());
-                _loaderSet = true;
-            }
+            EnsureLoader();
             var dataDir = Path.Combine(WebView2Deps.DataRoot, "WebView2");
             Directory.CreateDirectory(dataDir);
-            var env = await CoreWebView2Environment.CreateAsync(null, dataDir, new CoreWebView2EnvironmentOptions());
+            var fixedDir = FindFixedRuntime();
+            if (fixedDir != null) GrantSandboxAccess(fixedDir);
+            var env = await CoreWebView2Environment.CreateAsync(fixedDir, dataDir, new CoreWebView2EnvironmentOptions());
             if (gen != _gen) return;
 
             var wv = new WebView2 { DefaultBackgroundColor = PageBackground(_dark), Focusable = true };

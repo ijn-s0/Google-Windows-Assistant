@@ -26,7 +26,18 @@ When there's no app or file match, the **Google** row is selected and the previe
 - Selecting a Google suggestion shows its results. The **Gemini** row is right below the Google row, and Gemini answers work as before.
 - Prefer Gemini answers while you type? **Settings → Search & recommendations → When you search the web, show → Gemini answer**. The Google row is still one row below.
 
-It uses the **Microsoft Edge WebView2 Runtime**, which is built into Windows 11 and most Windows 10 PCs. If it's missing, the pane shows a link to get it from Microsoft. The browser starts when you begin typing and shuts down after the launcher has been closed for 5 minutes, so it doesn't use memory while idle. Its cookies (such as Google's consent choice) are kept in `%LOCALAPPDATA%\GeminiLauncher\WebView2`.
+It uses the **Microsoft Edge WebView2 Runtime**, which is built into Windows 11 and most Windows 10 PCs. If it's missing, the launcher works as before: Gemini answers come first, and the Google row opens Google in your browser.
+
+### No WebView2? (for example, you removed Microsoft Edge)
+
+The WebView2 Runtime is separate from the Edge browser. Installing it doesn't bring Edge back, and it doesn't show up as a browser. Two ways to get Google results in the launcher:
+
+1. **Install it** (updates itself): get the *Evergreen Bootstrapper* from [Microsoft's WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/), then reopen the launcher.
+2. **Portable, no installer**: on the same page, download the *Fixed Version* package for your CPU (x64 for most PCs), then extract it in a terminal:
+   ```
+   expand Microsoft.WebView2.FixedVersionRuntime.<version>.x64.cab -F:* "%LOCALAPPDATA%\GeminiLauncher\WebView2Runtime"
+   ```
+   The launcher finds it there automatically and sets the folder permissions it needs. This copy doesn't update itself, so replace it with a newer version now and then for security fixes. The browser starts when you begin typing and shuts down after the launcher has been closed for 5 minutes, so it doesn't use memory while idle. Its cookies (such as Google's consent choice) are kept in `%LOCALAPPDATA%\GeminiLauncher\WebView2`.
 
 It looks like Windows 11: it slides up from behind the taskbar like Start, with a system acrylic backdrop, rounded corners, Segoe UI Variable, your accent color, and it switches live between light and dark mode. On Windows 10 it uses acrylic blur. If transparency effects are off in Windows, it uses solid colors.
 
