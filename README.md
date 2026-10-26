@@ -14,7 +14,7 @@ When you open it without typing, you see:
 - **Recommended**: the apps you use most (from Windows' own usage data) and your recent files
 - **Searches**: your recent searches plus trending Google searches for your region
 
-It looks like Windows 11: system acrylic backdrop, rounded corners, Segoe UI Variable, your accent color, and it switches live between light and dark mode. On Windows 10 it uses acrylic blur. If transparency effects are off in Windows, it uses solid colors.
+It looks like Windows 11: it slides up from behind the taskbar like Start, with a system acrylic backdrop, rounded corners, Segoe UI Variable, your accent color, and it switches live between light and dark mode. On Windows 10 it uses acrylic blur. If transparency effects are off in Windows, it uses solid colors.
 
 ## Install
 
@@ -57,8 +57,12 @@ You can still open the **native Start menu** at any time: press **Ctrl+Esc**, **
 ## Gemini settings
 
 - **Model**: `gemini-3.5-flash-lite` by default, because it's the fastest. `gemini-3.8-flash` gives richer answers. You can type any model name.
-- **Instant answers while typing**: when you pause typing and no app or file is an obvious match, Gemini answers automatically. Turn this off if you only want to ask when you press Enter. Note that Google Search grounding includes 5,000 free search queries per month on Gemini 3+ models; after that it's billed by Google.
-- Uses `streamGenerateContent` with the `googleSearch` and `urlContext` tools. Sources and the Google queries Gemini ran are shown under each answer.
+- **Thinking level**: Medium by default (Minimal / Low / Medium / High / Model default). On Gemini 2.5 models it's converted to a thinking budget.
+- **Grounding tools**: Google Search, Google Maps and URL context are all on and sent together. If a model rejects a combination, the launcher retries without the conflicting tool, and the **Test** button tells you exactly what your model accepted.
+  - Google Maps places appear as chips labelled with the place name and "Google Maps", linking to the place.
+  - **Use my location for Google Maps** is off by default. Turn it on to send your approximate location (about 100 m) with requests, so "near me" questions work.
+- **Safety filters**: off. Every adjustable category (harassment, hate speech, sexually explicit, dangerous content, jailbreak) is set to `OFF`. Google's built-in protections still apply.
+- **Instant answers while typing**: when you pause typing and no app or file is an obvious match, Gemini answers automatically. Turn this off if you only want to ask when you press Enter. Google Search and Google Maps grounding each include 5,000 free queries per month on Gemini 3+ models; after that, Google bills them.
 
 ## Lightweight
 
