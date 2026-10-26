@@ -239,9 +239,10 @@
                 <TextBlock Text="Data" Style="{StaticResource Section}"/>
                 <Border Style="{StaticResource Card}">
                     <WrapPanel>
-                        <Button Style="{StaticResource FluentButton}" Content="Clear search history" Margin="0,0,8,0" Click="ClearHistory_Click"/>
-                        <Button Style="{StaticResource FluentButton}" Content="Rebuild app list" Margin="0,0,8,0" Click="Rebuild_Click"/>
-                        <Button Style="{StaticResource FluentButton}" Content="Open data folder" Margin="0,0,8,0" Click="DataFolder_Click"/>
+                        <Button Style="{StaticResource FluentButton}" Content="Clear search history" Margin="0,0,8,8" Click="ClearHistory_Click"/>
+                        <Button x:Name="RestoreHiddenButton" Style="{StaticResource FluentButton}" Content="Restore removed suggestions" Margin="0,0,8,8" Click="RestoreHidden_Click"/>
+                        <Button Style="{StaticResource FluentButton}" Content="Rebuild app list" Margin="0,0,8,8" Click="Rebuild_Click"/>
+                        <Button Style="{StaticResource FluentButton}" Content="Open data folder" Margin="0,0,8,8" Click="DataFolder_Click"/>
                     </WrapPanel>
                 </Border>
                 <TextBlock x:Name="VersionText" Style="{StaticResource Desc}" Margin="2,14,0,0"/>

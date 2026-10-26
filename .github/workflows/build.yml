@@ -93,7 +93,11 @@ jobs:
           $log = "$env:APPDATA\GeminiLauncher\error.log"
           if (Test-Path $log) { Write-Host "---- error.log ----"; Get-Content $log; Copy-Item $log shots/ }
           Get-ChildItem shots | Format-Table Name, Length
+      - name: Rearrange pins and remove suggestions (UI test)
+        shell: pwsh
+        run: ./.github/scripts/home-edit-test.ps1 -exe (Resolve-Path "src/bin/Release/net48/GeminiLauncher.exe").Path
       - name: Push screenshots to a branch
+        if: always()
         shell: pwsh
         run: |
           git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
@@ -104,6 +108,7 @@ jobs:
           git commit -m "screenshots ${{ github.sha }}" | Out-Null
           git push -f origin "HEAD:refs/heads/$br"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: shots-${{ matrix.os }}
           path: shots

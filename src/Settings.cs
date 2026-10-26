@@ -39,6 +39,10 @@ namespace GeminiLauncher
         public bool DefaultPinsDone;
         public List<Pin> Pins = new List<Pin>();
         public List<string> RecentSearches = new List<string>();
+        /// <summary>Recommended items the user removed ("app:ID" / "file:path").</summary>
+        public List<string> HiddenRecommended = new List<string>();
+        /// <summary>Trending searches and Google suggestions the user removed.</summary>
+        public List<string> HiddenSearches = new List<string>();
         public Dictionary<string, int> LaunchCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         public static readonly string[] KnownModels =
@@ -85,6 +89,10 @@ namespace GeminiLauncher
                     s.Pins.Add(new Pin { Kind = p.Str("kind"), Name = p.Str("name"), Target = p.Str("target") });
                 foreach (var r in o.Get("recentSearches").Arr())
                     if (r is string rs) s.RecentSearches.Add(rs);
+                foreach (var r in o.Get("hiddenRecommended").Arr())
+                    if (r is string hr) s.HiddenRecommended.Add(hr);
+                foreach (var r in o.Get("hiddenSearches").Arr())
+                    if (r is string hs) s.HiddenSearches.Add(hs);
                 if (o.Get("launchCounts") is Dictionary<string, object> lc)
                     foreach (var kv in lc) if (kv.Value is double d) s.LaunchCounts[kv.Key] = (int)d;
             }
@@ -119,6 +127,8 @@ namespace GeminiLauncher
                     ["defaultPinsDone"] = DefaultPinsDone,
                     ["pins"] = Pins.Select(p => (object)new Dictionary<string, object> { ["kind"] = p.Kind, ["name"] = p.Name, ["target"] = p.Target }).ToList(),
                     ["recentSearches"] = RecentSearches.Cast<object>().ToList(),
+                    ["hiddenRecommended"] = HiddenRecommended.Cast<object>().ToList(),
+                    ["hiddenSearches"] = HiddenSearches.Cast<object>().ToList(),
                     ["launchCounts"] = LaunchCounts.ToDictionary(k => k.Key, k => (object)k.Value),
                 };
                 var tmp = FilePath + ".tmp";
@@ -147,6 +157,35 @@ namespace GeminiLauncher
             RecentSearches.RemoveAll(x => string.Equals(x, q, StringComparison.OrdinalIgnoreCase));
             RecentSearches.Insert(0, q);
             if (RecentSearches.Count > 20) RecentSearches.RemoveRange(20, RecentSearches.Count - 20);
+            Save();
+        }
+
+        public void RemoveRecentSearch(string q)
+        {
+            RecentSearches.RemoveAll(x => string.Equals(x, q, StringComparison.OrdinalIgnoreCase));
+            Save();
+        }
+
+        public bool IsHiddenRecommended(string key) =>
+            key != null && HiddenRecommended.Any(x => string.Equals(x, key, StringComparison.OrdinalIgnoreCase));
+
+        public void HideRecommended(string key)
+        {
+            if (string.IsNullOrEmpty(key) || IsHiddenRecommended(key)) return;
+            HiddenRecommended.Add(key);
+            if (HiddenRecommended.Count > 500) HiddenRecommended.RemoveRange(0, HiddenRecommended.Count - 500);
+            Save();
+        }
+
+        public bool IsHiddenSearch(string q) =>
+            q != null && HiddenSearches.Any(x => string.Equals(x, q.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        public void HideSearch(string q)
+        {
+            q = (q ?? "").Trim();
+            if (q.Length == 0 || IsHiddenSearch(q)) return;
+            HiddenSearches.Add(q);
+            if (HiddenSearches.Count > 500) HiddenSearches.RemoveRange(0, HiddenSearches.Count - 500);
             Save();
         }
 

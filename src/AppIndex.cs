@@ -208,7 +208,7 @@ namespace GeminiLauncher
                 }
 
             var pinned = new HashSet<string>(s.Pins.Where(p => p.Kind == "app").Select(p => p.Target), StringComparer.OrdinalIgnoreCase);
-            return Apps.Where(a => scores.ContainsKey(a.Id) && !pinned.Contains(a.Id))
+            return Apps.Where(a => scores.ContainsKey(a.Id) && !pinned.Contains(a.Id) && !s.IsHiddenRecommended("app:" + a.Id))
                        .OrderByDescending(a => scores[a.Id]).Take(max).ToList();
         }
 

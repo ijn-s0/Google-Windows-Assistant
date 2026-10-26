@@ -25,6 +25,14 @@ namespace GeminiLauncher
         public bool IsHeader => Kind == ItemKind.Header;
         public bool IsPinned { get; set; }
 
+        /// <summary>Shown on the home screen with an X button (Recommended items, recent and trending searches).</summary>
+        public bool Removable { get; set; }
+        public string RemoveTip { get; set; }
+
+        bool _dragging;
+        /// <summary>True while this pinned tile is being dragged to a new position.</summary>
+        public bool IsDragging { get => _dragging; set { if (_dragging == value) return; _dragging = value; OnChanged(nameof(IsDragging)); } }
+
         public string PinKind
         {
             get

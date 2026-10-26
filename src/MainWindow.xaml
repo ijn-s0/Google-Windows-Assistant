@@ -87,6 +87,25 @@
             <Setter Property="Height" Value="86"/>
             <Setter Property="Padding" Value="4"/>
             <Setter Property="Margin" Value="0,0,2,2"/>
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+            <Setter Property="RenderTransform"><Setter.Value><ScaleTransform/></Setter.Value></Setter>
+            <Style.Triggers>
+                <!-- Tile being dragged to a new position: lifted and translucent -->
+                <DataTrigger Binding="{Binding IsDragging}" Value="True">
+                    <Setter Property="Opacity" Value="0.7"/>
+                    <Setter Property="Background" Value="{DynamicResource SelBg}"/>
+                    <Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="1.06" ScaleY="1.06"/></Setter.Value></Setter>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Small X button on removable home rows -->
+        <Style x:Key="RemoveButton" TargetType="Button" BasedOn="{StaticResource SubtleButton}">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Visibility" Value="Hidden"/>
         </Style>
         <DataTemplate x:Key="TileTemplate" DataType="{x:Type local:ResultItem}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -111,6 +130,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="38"/>
                     <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <Grid Width="26" Height="26" HorizontalAlignment="Left">
                     <Image Source="{Binding Icon}" RenderOptions.BitmapScalingMode="HighQuality"/>
@@ -121,7 +141,28 @@
                     <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Fg1}"/>
                     <TextBlock Text="{Binding Subtitle}" TextTrimming="CharacterEllipsis" FontSize="11.5" Foreground="{DynamicResource Fg3}"/>
                 </StackPanel>
+                <Button x:Name="RemoveBtn" Grid.Column="2" Style="{StaticResource RemoveButton}" Margin="4,0,0,0"
+                        Click="RemoveSuggestion_Click" ToolTip="{Binding RemoveTip}" AutomationProperties.Name="{Binding RemoveTip}">
+                    <Path Data="M0,0 L8,8 M8,0 L0,8" Stroke="{DynamicResource Fg2}" StrokeThickness="1.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Button>
             </Grid>
+            <DataTemplate.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding Removable}" Value="True"/>
+                        <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter TargetName="RemoveBtn" Property="Visibility" Value="Visible"/>
+                </MultiDataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding Removable}" Value="True"/>
+                        <Condition Binding="{Binding IsKeyboardFocused, RelativeSource={RelativeSource AncestorType=Button}}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter TargetName="RemoveBtn" Property="Visibility" Value="Visible"/>
+                </MultiDataTrigger>
+            </DataTemplate.Triggers>
         </DataTemplate>
     </Window.Resources>
 
@@ -180,19 +221,22 @@
                         </StackPanel>
                     </Button>
                 </Grid>
-                <ItemsControl x:Name="PinsList" Focusable="False">
+                <ItemsControl x:Name="PinsList" Focusable="False" Background="Transparent"
+                              PreviewMouseLeftButtonDown="Pins_PreviewMouseDown" PreviewMouseMove="Pins_PreviewMouseMove"
+                              PreviewMouseLeftButtonUp="Pins_PreviewMouseUp" LostMouseCapture="Pins_LostMouseCapture">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
                             <Button Style="{StaticResource TileButton}" Content="{Binding}" ContentTemplate="{StaticResource TileTemplate}"
-                                    Click="HomeItem_Click" MouseRightButtonUp="HomeItem_RightClick" ToolTip="{Binding Subtitle}"/>
+                                    Click="HomeItem_Click" MouseRightButtonUp="HomeItem_RightClick" ToolTip="{Binding Subtitle}"
+                                    AutomationProperties.Name="{Binding Title}"/>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <TextBlock x:Name="NoPins" Margin="8,4,0,8" Foreground="{DynamicResource Fg3}" TextWrapping="Wrap" Visibility="Collapsed"
-                           Text="Right-click any app or file in search results and choose Pin, or use Add."/>
+                           Text="Right-click any app or file in search results and choose Pin, or use Add. Drag pins to rearrange them."/>
 
                 <Grid Margin="0,14,0,0">
                     <Grid.ColumnDefinitions>
@@ -206,7 +250,8 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Button Style="{StaticResource RowButton}" Content="{Binding}" ContentTemplate="{StaticResource RowTemplate}"
-                                            Click="HomeItem_Click" MouseRightButtonUp="HomeItem_RightClick" ToolTip="{Binding Target}"/>
+                                            Click="HomeItem_Click" MouseRightButtonUp="HomeItem_RightClick" ToolTip="{Binding Target}"
+                                            AutomationProperties.Name="{Binding Title}"/>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
@@ -217,7 +262,7 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Button Style="{StaticResource RowButton}" Content="{Binding}" ContentTemplate="{StaticResource RowTemplate}"
-                                            Click="HomeItem_Click" MouseRightButtonUp="HomeItem_RightClick"/>
+                                            Click="HomeItem_Click" MouseRightButtonUp="HomeItem_RightClick" AutomationProperties.Name="{Binding Title}"/>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>

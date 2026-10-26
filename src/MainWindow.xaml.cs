@@ -23,6 +23,11 @@ namespace GeminiLauncher
         Settings S => AppRef.Settings;
 
         readonly ObservableCollection<ResultItem> _results = new ObservableCollection<ResultItem>();
+        // Home lists are kept and updated in place, so removing or moving one item doesn't rebuild (and flicker) the rest.
+        readonly ObservableCollection<ResultItem> _pinItems = new ObservableCollection<ResultItem>();
+        readonly ObservableCollection<ResultItem> _recItems = new ObservableCollection<ResultItem>();
+        readonly ObservableCollection<ResultItem> _searchItems = new ObservableCollection<ResultItem>();
+        int _homeVer;
         int _ver;
         CancellationTokenSource _cts, _answerCts;
         string _q = "";
@@ -41,6 +46,9 @@ namespace GeminiLauncher
         {
             InitializeComponent();
             ResultsList.ItemsSource = _results;
+            PinsList.ItemsSource = _pinItems;
+            RecommendedList.ItemsSource = _recItems;
+            SearchesList.ItemsSource = _searchItems;
             SearchBox.TextChanged += (s, e) => OnQueryChanged();
             SearchBox.SelectionChanged += (s, e) => UpdateGhost();
             PreviewKeyDown += OnKey;
@@ -249,7 +257,7 @@ namespace GeminiLauncher
             Placeholder.Visibility = Visibility.Visible;
             ClearButton.Visibility = Visibility.Collapsed;
             GhostTyped.Text = GhostRest.Text = "";
-            FooterHint.Text = "Type to search apps, files and the web  ·  Enter to open  ·  Esc to close";
+            FooterHint.Text = "Type to search  ·  Drag pins to rearrange  ·  Del removes a suggestion  ·  Right-click for more";
             HomeView.ScrollToTop();
         }
 
@@ -264,6 +272,8 @@ namespace GeminiLauncher
 
         public void RefreshHome()
         {
+            int hv = ++_homeVer;
+
             // Pinned
             var pins = new List<ResultItem>();
             foreach (var p in S.Pins)
@@ -271,43 +281,84 @@ namespace GeminiLauncher
                 var it = FromPin(p);
                 if (it != null) pins.Add(it);
             }
-            PinsList.ItemsSource = pins;
+            if (!_dragging) Sync(_pinItems, pins);   // don't undo a drag in progress
             NoPins.Visibility = pins.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-            // Recommended: frequent apps + recent files
-            var rec = new ObservableCollection<ResultItem>();
+            // Recommended: frequent apps + recent files (minus anything the user removed)
+            var apps = new List<ResultItem>();
             foreach (var a in AppIndex.Frequent(S, 3))
             {
                 var it = MakeApp(a, 0);
                 it.Subtitle = "Frequently used";
-                rec.Add(it);
+                MakeRemovable(it, "Remove from list");
+                apps.Add(it);
             }
-            RecommendedList.ItemsSource = rec;
-            Task.Run(() => FileSearch.Recent(6)).ContinueWith(t =>
+            // Show the apps now, keep the files we already had until the fresh list arrives.
+            Sync(_recItems, apps.Concat(_recItems.Where(x => x.Kind == ItemKind.File && !S.IsHiddenRecommended(x.LaunchKey))).ToList());
+            Task.Run(() => FileSearch.Recent(20)).ContinueWith(t =>
             {
-                if (t.IsFaulted) return;
-                foreach (var f in t.Result)
-                {
-                    var it = new ResultItem { Kind = ItemKind.File, Title = f.Name, Target = f.Path, Subtitle = FileSearch.Ago(f.Modified), When = f.Modified };
-                    IconLoader.Request(it);
-                    rec.Add(it);
-                }
+                if (hv != _homeVer) return;
+                var files = new List<ResultItem>();
+                if (!t.IsFaulted)
+                    foreach (var f in t.Result)
+                    {
+                        if (files.Count >= 6) break;
+                        var it = new ResultItem { Kind = ItemKind.File, Title = f.Name, Target = f.Path, Subtitle = FileSearch.Ago(f.Modified), When = f.Modified };
+                        if (S.IsHiddenRecommended(it.LaunchKey)) continue;
+                        MakeRemovable(it, "Remove from list");
+                        IconLoader.Request(it);
+                        files.Add(it);
+                    }
+                Sync(_recItems, apps.Concat(files).ToList());
             }, TaskScheduler.FromCurrentSynchronizationContext());
 
             // Searches: recent + trending
-            var searches = new ObservableCollection<ResultItem>();
-            foreach (var q in S.RecentSearches.Take(3))
-                searches.Add(new ResultItem { Kind = ItemKind.Recent, Title = q, Target = q, Subtitle = "Recent search", Glyph = Glyphs.History });
-            SearchesList.ItemsSource = searches;
-            if (S.ShowTrending)
+            var recent = S.RecentSearches.Take(3)
+                .Select(q => MakeRemovable(new ResultItem { Kind = ItemKind.Recent, Title = q, Target = q, Subtitle = "Recent search", Glyph = Glyphs.History }, "Remove from history"))
+                .ToList();
+            List<ResultItem> WithTrending(IEnumerable<ResultItem> trending)
             {
-                var geo = S.EffectiveRegion;
-                Trends.GetAsync(geo).ContinueWith(t =>
+                var seen = new HashSet<string>(recent.Select(r => r.Target), StringComparer.OrdinalIgnoreCase);
+                var l = new List<ResultItem>(recent);
+                foreach (var tr in trending)
+                    if (l.Count < 8 && !S.IsHiddenSearch(tr.Target) && seen.Add(tr.Target)) l.Add(tr);
+                return l;
+            }
+            if (!S.ShowTrending) { Sync(_searchItems, recent); return; }
+            Sync(_searchItems, WithTrending(_searchItems.Where(x => x.Kind == ItemKind.Trending)));
+            var geo = S.EffectiveRegion;
+            Trends.GetAsync(geo).ContinueWith(t =>
+            {
+                if (hv != _homeVer || t.IsFaulted) return;
+                Sync(_searchItems, WithTrending(t.Result.Select(tr =>
+                    MakeRemovable(new ResultItem { Kind = ItemKind.Trending, Title = tr, Target = tr, Subtitle = "Trending in " + geo, Glyph = Glyphs.Trend }, "Don't show this search"))));
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        static ResultItem MakeRemovable(ResultItem it, string tip) { it.Removable = true; it.RemoveTip = tip; return it; }
+
+        static string HomeKey(ResultItem x) => x.Kind + "|" + (x.Target ?? "").ToLowerInvariant();
+
+        /// <summary>Makes <paramref name="col"/> match <paramref name="want"/> with the fewest changes,
+        /// reusing existing items (keeps icons loaded, keyboard focus and avoids flicker).</summary>
+        static void Sync(ObservableCollection<ResultItem> col, List<ResultItem> want)
+        {
+            var seen = new HashSet<string>();
+            want = want.Where(w => seen.Add(HomeKey(w))).ToList();
+            for (int i = col.Count - 1; i >= 0; i--)
+                if (!seen.Contains(HomeKey(col[i]))) col.RemoveAt(i);
+            for (int i = 0; i < want.Count; i++)
+            {
+                var k = HomeKey(want[i]);
+                int at = -1;
+                for (int j = i; j < col.Count; j++) if (HomeKey(col[j]) == k) { at = j; break; }
+                if (at < 0) col.Insert(i, want[i]);
+                else
                 {
-                    if (t.IsFaulted) return;
-                    foreach (var tr in t.Result.Take(8 - searches.Count))
-                        searches.Add(new ResultItem { Kind = ItemKind.Trending, Title = tr, Target = tr, Subtitle = "Trending in " + geo, Glyph = Glyphs.Trend });
-                }, TaskScheduler.FromCurrentSynchronizationContext());
+                    if (at != i) col.Move(at, i);
+                    var cur = col[i];
+                    if (cur.Subtitle != want[i].Subtitle || cur.Title != want[i].Title) col[i] = want[i]; // refresh "3 min ago" etc.
+                }
             }
         }
 
@@ -386,7 +437,7 @@ namespace GeminiLauncher
                 await Task.Delay(30, ct);
                 var list = await GoogleSuggest.GetAsync(q, ct);
                 if (v != _ver) return;
-                _sugs = list;
+                _sugs = list.Where(x => !S.IsHiddenSearch(x)).ToList();
                 Rebuild();
                 UpdateGhost();
             }
@@ -814,8 +865,28 @@ namespace GeminiLauncher
                     l.Add(("Ask Gemini", () => Execute(it)));
                     l.Add(("Search on Google", () => { Launcher.GoogleSearch(it.Target); S.AddRecentSearch(it.Target); AppRef.HideLauncher(); }));
                     if (it.Kind == ItemKind.Recent)
-                        l.Add(("Remove from history", () => { S.RecentSearches.Remove(it.Target); S.Save(); RefreshHome(); }));
+                    {
+                        l.Add(("-", null));
+                        l.Add(("Remove from history", () => RemoveSuggestion(it)));
+                        l.Add(("Clear all search history", () => { S.RecentSearches.Clear(); S.Save(); RefreshHome(); FocusSearch(); }));
+                    }
+                    else if (it.Kind == ItemKind.Trending)
+                    {
+                        l.Add(("-", null));
+                        l.Add(("Don't show this search", () => RemoveSuggestion(it)));
+                        l.Add(("Turn off trending searches", () => { S.ShowTrending = false; S.Save(); RefreshHome(); FocusSearch(); }));
+                    }
+                    else if (it.Kind == ItemKind.Suggestion)
+                    {
+                        l.Add(("-", null));
+                        l.Add(("Remove suggestion", () => RemoveSuggestion(it)));
+                    }
                     break;
+            }
+            if (it.Removable && (it.Kind == ItemKind.App || it.Kind == ItemKind.File))
+            {
+                l.Add(("-", null));
+                l.Add(("Remove from list", () => RemoveSuggestion(it)));
             }
             if (it.PinKind != null)
             {
@@ -824,10 +895,13 @@ namespace GeminiLauncher
                     l.Add(("Unpin from launcher", () => TogglePin(it)));
                 else
                     l.Add(("Pin to launcher", () => TogglePin(it)));
-                if (tile)
+                int pi = tile ? _pinItems.IndexOf(it) : -1;
+                if (pi >= 0)
                 {
-                    l.Add(("Move left", () => MovePin(it, -1)));
-                    l.Add(("Move right", () => MovePin(it, +1)));
+                    if (pi > 0) l.Add(("Move to front", () => MovePinTo(it, 0)));
+                    if (pi > 0) l.Add(("Move left", () => MovePin(it, -1)));
+                    if (pi < _pinItems.Count - 1) l.Add(("Move right", () => MovePin(it, +1)));
+                    if (pi < _pinItems.Count - 1) l.Add(("Move to end", () => MovePinTo(it, _pinItems.Count - 1)));
                 }
             }
             return l;
@@ -838,12 +912,17 @@ namespace GeminiLauncher
             var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
             foreach (var (label, act) in ActionsFor(it, tile))
             {
-                if (label == "-") { menu.Items.Add(new Separator()); continue; }
+                if (label == "-")
+                {
+                    if (menu.Items.Count > 0 && !(menu.Items[menu.Items.Count - 1] is Separator)) menu.Items.Add(new Separator());
+                    continue;
+                }
                 var mi = new MenuItem { Header = label };
                 var a = act;
                 mi.Click += (s, e) => a();
                 menu.Items.Add(mi);
             }
+            if (menu.Items.Count > 0 && menu.Items[menu.Items.Count - 1] is Separator) menu.Items.RemoveAt(menu.Items.Count - 1);
             if (menu.Items.Count > 0) menu.IsOpen = true;
         }
 
@@ -865,12 +944,183 @@ namespace GeminiLauncher
 
         void MovePin(ResultItem it, int d)
         {
-            int i = S.Pins.FindIndex(p => p.Target == it.Target);
-            int j = i + d;
-            if (i < 0 || j < 0 || j >= S.Pins.Count) return;
-            var p0 = S.Pins[i]; S.Pins[i] = S.Pins[j]; S.Pins[j] = p0;
+            int i = PinIndexOf(it);
+            if (i >= 0) MovePinTo(it, i + d);
+        }
+
+        void MovePinTo(ResultItem it, int j)
+        {
+            int i = PinIndexOf(it);
+            if (i < 0) return;
+            j = Math.Max(0, Math.Min(_pinItems.Count - 1, j));
+            if (j == i) return;
+            bool hadFocus = FocusedHomeItem() == _pinItems[i];
+            _pinItems.Move(i, j);
+            SavePinOrder();
+            if (hadFocus) FocusHomeItem(PinsList, j);
+        }
+
+        int PinIndexOf(ResultItem it)
+        {
+            for (int i = 0; i < _pinItems.Count; i++)
+                if (_pinItems[i] == it || string.Equals(_pinItems[i].Target, it.Target, StringComparison.OrdinalIgnoreCase)) return i;
+            return -1;
+        }
+
+        /// <summary>Writes the on-screen tile order back to settings (pins that couldn't be shown keep their place at the end).</summary>
+        void SavePinOrder()
+        {
+            var order = _pinItems.Select(x => x.Target).ToList();
+            int Rank(Pin p) { int k = order.FindIndex(t => string.Equals(t, p.Target, StringComparison.OrdinalIgnoreCase)); return k < 0 ? int.MaxValue : k; }
+            var sorted = S.Pins.Select((p, n) => (p, n)).OrderBy(x => Rank(x.p)).ThenBy(x => x.n).Select(x => x.p).ToList();
+            S.Pins.Clear();
+            S.Pins.AddRange(sorted);
             S.Save();
+        }
+
+        // ======================= REMOVE SUGGESTIONS =======================
+
+        /// <summary>Removes a Recommended item, a recent search, a trending search or a Google suggestion.</summary>
+        void RemoveSuggestion(ResultItem it)
+        {
+            if (it == null) return;
+            ObservableCollection<ResultItem> list = null;
+            ItemsControl ic = null;
+            if (_recItems.Contains(it)) { list = _recItems; ic = RecommendedList; }
+            else if (_searchItems.Contains(it)) { list = _searchItems; ic = SearchesList; }
+            bool hadFocus = FocusedHomeItem() == it;
+            int index = list?.IndexOf(it) ?? -1;
+
+            switch (it.Kind)
+            {
+                case ItemKind.Recent: S.RemoveRecentSearch(it.Target); break;
+                case ItemKind.Trending: S.HideSearch(it.Target); break;
+                case ItemKind.Suggestion:
+                    S.HideSearch(it.Target);
+                    _sugs.RemoveAll(x => string.Equals(x, it.Target, StringComparison.OrdinalIgnoreCase));
+                    Rebuild(); UpdateGhost();
+                    return;
+                case ItemKind.App:
+                case ItemKind.File:
+                case ItemKind.Folder:
+                    S.HideRecommended(it.LaunchKey); break;
+                default: return;
+            }
+            list?.Remove(it);  // instant feedback; RefreshHome then backfills
             RefreshHome();
+            if (hadFocus && ic != null)
+            {
+                if (ic.Items.Count > 0) FocusHomeItem(ic, Math.Min(index, ic.Items.Count - 1));
+                else FocusSearch();
+            }
+        }
+
+        void RemoveSuggestion_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.DataContext is ResultItem it) RemoveSuggestion(it);
+            e.Handled = true;
+        }
+
+        ResultItem FocusedHomeItem() => (Keyboard.FocusedElement as Button)?.Content as ResultItem;
+
+        void FocusHomeItem(ItemsControl ic, int index)
+        {
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+            {
+                if (index < 0 || index >= ic.Items.Count) return;
+                var c = ic.ItemContainerGenerator.ContainerFromIndex(index) as DependencyObject;
+                var b = c != null ? FindChild<Button>(c) : null;
+                if (b != null) Keyboard.Focus(b);
+            }));
+        }
+
+        // ======================= DRAG TO REARRANGE PINS =======================
+
+        ResultItem _dragItem;
+        Point _dragStart;
+        bool _dragging;
+        List<ResultItem> _dragOriginal;
+
+        ResultItem PinFromElement(object source)
+        {
+            if (!(source is DependencyObject d)) return null;
+            if (!(d is Visual) && !(d is System.Windows.Media.Media3D.Visual3D))
+            {
+                // e.g. a Run inside a TextBlock: walk up the logical tree to a visual
+                while (d != null && !(d is Visual)) d = LogicalTreeHelper.GetParent(d);
+                if (d == null) return null;
+            }
+            var c = ItemsControl.ContainerFromElement(PinsList, d) as FrameworkElement;
+            return c?.DataContext as ResultItem;
+        }
+
+        void Pins_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            EndPinDrag(true);
+            _dragItem = PinFromElement(e.OriginalSource);
+            _dragStart = e.GetPosition(PinsList);
+        }
+
+        void Pins_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (_dragItem == null) return;
+            if (e.LeftButton != MouseButtonState.Pressed) { EndPinDrag(true); return; }
+            var p = e.GetPosition(PinsList);
+            if (!_dragging)
+            {
+                if (Math.Abs(p.X - _dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+                    Math.Abs(p.Y - _dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+                _dragging = true;
+                _dragOriginal = _pinItems.ToList();
+                _dragItem.IsDragging = true;
+                PinsList.CaptureMouse();          // takes capture from the tile, so releasing won't "click" it
+                Mouse.OverrideCursor = Cursors.SizeAll;
+            }
+            int target = PinIndexAt(p);
+            int cur = _pinItems.IndexOf(_dragItem);
+            if (target >= 0 && cur >= 0 && target != cur) _pinItems.Move(cur, target);
+            e.Handled = true;
+        }
+
+        void Pins_PreviewMouseUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_dragging) { EndPinDrag(true); e.Handled = true; }
+            else _dragItem = null;
+        }
+
+        void Pins_LostMouseCapture(object sender, MouseEventArgs e)
+        {
+            if (_dragging) EndPinDrag(true);
+        }
+
+        void EndPinDrag(bool commit)
+        {
+            bool was = _dragging;
+            _dragging = false;
+            if (_dragItem != null) _dragItem.IsDragging = false;
+            _dragItem = null;
+            if (!was) return;
+            Mouse.OverrideCursor = null;
+            if (PinsList.IsMouseCaptured) PinsList.ReleaseMouseCapture();
+            if (commit) SavePinOrder();
+            else if (_dragOriginal != null) Sync(_pinItems, _dragOriginal);
+            _dragOriginal = null;
+        }
+
+        /// <summary>Index of the tile under <paramref name="p"/> (PinsList coordinates). Past the last tile = last position.</summary>
+        int PinIndexAt(Point p)
+        {
+            Rect last = Rect.Empty;
+            for (int i = 0; i < _pinItems.Count; i++)
+            {
+                if (!(PinsList.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement c) || !c.IsVisible) continue;
+                var r = new Rect(c.TranslatePoint(new Point(0, 0), PinsList), new Size(c.ActualWidth, c.ActualHeight));
+                if (r.Contains(p)) return i;
+                last = r;
+            }
+            if (!last.IsEmpty && ((p.Y >= last.Top && p.X > last.Right) || p.Y > last.Bottom)) return _pinItems.Count - 1;
+            if (p.Y < 0) return 0;
+            return -1;
         }
 
         public void Execute(ResultItem it, bool admin = false)
@@ -946,6 +1196,7 @@ namespace GeminiLauncher
             switch (key)
             {
                 case Key.Escape:
+                    if (_dragging) { EndPinDrag(false); e.Handled = true; return; }
                     if (SearchBox.Text.Length > 0) { SearchBox.Text = ""; FocusSearch(); }
                     else AppRef.HideLauncher();
                     e.Handled = true; return;
@@ -965,6 +1216,12 @@ namespace GeminiLauncher
 
                 case Key.Left:
                 case Key.Right:
+                    // Alt+Shift+Left/Right moves the focused pin (same shortcut as the Windows 11 Start menu)
+                    if (!inBox && mods == (ModifierKeys.Alt | ModifierKeys.Shift) && FocusedHomeItem() is ResultItem mp && _pinItems.Contains(mp))
+                    {
+                        MovePin(mp, key == Key.Right ? 1 : -1);
+                        e.Handled = true; return;
+                    }
                     if (!inBox && Keyboard.FocusedElement is UIElement fe2)
                     {
                         fe2.MoveFocus(new TraversalRequest(key == Key.Right ? FocusNavigationDirection.Right : FocusNavigationDirection.Left));
@@ -1018,6 +1275,32 @@ namespace GeminiLauncher
                     {
                         var c = ResultsList.ItemContainerGenerator.ContainerFromItem(Selected) as UIElement;
                         ShowMenu(Selected, c ?? ResultsList, false);
+                        e.Handled = true;
+                    }
+                    else if (!inBox && Keyboard.FocusedElement is Button mb && mb.Content is ResultItem mi)
+                    {
+                        ShowMenu(mi, mb, _pinItems.Contains(mi));
+                        e.Handled = true;
+                    }
+                    return;
+
+                case Key.Delete:
+                    // Home: Del removes the focused suggestion (or unpins the focused pin).
+                    if (!inBox && FocusedHomeItem() is ResultItem di)
+                    {
+                        if (di.Removable) RemoveSuggestion(di);
+                        else if (_pinItems.Contains(di))
+                        {
+                            int at = _pinItems.IndexOf(di);
+                            TogglePin(di);
+                            if (_pinItems.Count > 0) FocusHomeItem(PinsList, Math.Min(at, _pinItems.Count - 1)); else FocusSearch();
+                        }
+                        e.Handled = true; return;
+                    }
+                    // Results: Shift+Del removes the selected Google suggestion (like Chrome's address bar).
+                    if (results && mods == ModifierKeys.Shift && Selected?.Kind == ItemKind.Suggestion)
+                    {
+                        RemoveSuggestion(Selected);
                         e.Handled = true;
                     }
                     return;

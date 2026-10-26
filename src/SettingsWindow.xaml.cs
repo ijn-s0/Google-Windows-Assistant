@@ -108,6 +108,13 @@ namespace GeminiLauncher
             ((Button)sender).Content = "History cleared";
         }
 
+        void RestoreHidden_Click(object sender, RoutedEventArgs e)
+        {
+            int n = S.HiddenRecommended.Count + S.HiddenSearches.Count;
+            S.HiddenRecommended.Clear(); S.HiddenSearches.Clear(); S.Save();
+            ((Button)sender).Content = n == 1 ? "1 suggestion restored" : n + " suggestions restored";
+        }
+
         void Rebuild_Click(object sender, RoutedEventArgs e)
         {
             AppIndex.RefreshAsync(force: true);
