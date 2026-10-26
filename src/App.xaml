@@ -214,6 +214,16 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- Menus look up separators by this key (not the implicit style), so register the same look here -->
+        <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}" TargetType="Separator">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Separator">
+                        <Border Height="1" Background="{DynamicResource Divider}" Margin="-4,4"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
         <!-- Win11 toggle switch (CheckBox) -->
         <Style x:Key="ToggleSwitch" TargetType="CheckBox">

@@ -10,9 +10,11 @@ A lightweight replacement for the Windows Start menu and search (Bing). Tap the 
 
 When you open it without typing, you see:
 
-- **Pinned** apps, files, folders and websites. Right-click anything to pin it, or use **Add**.
-- **Recommended**: the apps you use most (from Windows' own usage data) and your recent files
-- **Searches**: your recent searches plus trending Google searches for your region
+- **Pinned** apps, files, folders and websites. Right-click anything to pin it, or use **Add**. **Drag a pin** to rearrange your pins, or right-click it and pick **Move to front / left / right / end**.
+- **Recommended**: the apps you use most (from Windows' own usage data) and your recent files. Hover over an item and click **×** (or press **Del**, or right-click → **Remove from list**) to remove it.
+- **Searches**: your recent searches plus trending Google searches for your region. Remove any of them the same way. Removed items stay hidden; **Settings → Data → Restore removed suggestions** brings them back.
+
+When you type, apps, settings and files are listed first and web results (Gemini and Google suggestions) come after them. Clicking anywhere outside the launcher closes it, just like Start.
 
 It looks like Windows 11: it slides up from behind the taskbar like Start, with a system acrylic backdrop, rounded corners, Segoe UI Variable, your accent color, and it switches live between light and dark mode. On Windows 10 it uses acrylic blur. If transparency effects are off in Windows, it uses solid colors.
 
@@ -50,6 +52,9 @@ You can still open the **native Start menu** at any time: press **Ctrl+Esc**, **
 | Ctrl+Shift+Enter | Run as administrator |
 | Alt+Enter | Open file location |
 | Ctrl+P | Pin or unpin the selected item |
+| Alt+Shift+← / → | Move the focused pin (same as Windows 11 Start) |
+| Del | Remove the focused suggestion, or unpin the focused pin |
+| Shift+Del | Remove the selected Google suggestion while typing |
 | Menu key / right-click | More actions |
 | Ctrl+, | Settings |
 | Esc | Clear, then close |
