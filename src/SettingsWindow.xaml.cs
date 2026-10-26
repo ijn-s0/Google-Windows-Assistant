@@ -18,6 +18,8 @@ namespace GeminiLauncher
         {
             _app = app;
             InitializeComponent();
+            var wa = SystemParameters.WorkArea;
+            if (Height > wa.Height - 40) Height = Math.Max(MinHeight, wa.Height - 40);
             SourceInitialized += (s, e) => Theme.ApplyBackdrop(this, true, 2);
             Action onTheme = () => Theme.ApplyBackdrop(this, true, 2);
             Theme.Changed += onTheme;

@@ -46,7 +46,13 @@ namespace GeminiLauncher
             PreviewKeyDown += OnKey;
             PreviewTextInput += OnTextInput;
             Deactivated += (s, e) => { if (!SuppressHide && IsVisible) AppRef.HideLauncher(); };
-            SourceInitialized += (s, e) => Theme.ApplyBackdrop(this);
+            SourceInitialized += (s, e) =>
+            {
+                // Remove the system menu so DWM doesn't draw a caption close button on the glass frame.
+                var h = new WindowInteropHelper(this).Handle;
+                Native.SetWindowLong(h, -16 /*GWL_STYLE*/, Native.GetWindowLong(h, -16) & ~0x00080000 /*WS_SYSMENU*/);
+                Theme.ApplyBackdrop(this);
+            };
             Theme.Changed += () => { Theme.ApplyBackdrop(this); if (_bound != null) RenderAnswer(); };
             _instantTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
             _instantTimer.Tick += (s, e) => { _instantTimer.Stop(); MaybeInstantAnswer(); };
