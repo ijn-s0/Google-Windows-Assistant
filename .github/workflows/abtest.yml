@@ -15,39 +15,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build NEW code
         run: dotnet build src/GeminiLauncher.csproj -c Release
-      - name: Build OLD code (bec8170 from codeload, full SHA)
-        if: always()
-        continue-on-error: true
+      - name: Download OLD (bec8170) build artifact
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force ab | Out-Null
-          try {
-            Invoke-WebRequest "https://codeload.github.com/${{ github.repository }}/tar.gz/bec8170383335165005bdcee932405249af6b01b" -OutFile old.tar.gz
-            tar -xzf old.tar.gz
-            $oldSrc = (Get-ChildItem -Directory gemini-launcher-* | Select-Object -First 1).FullName
-            "OLDSRC=$oldSrc" | Out-File $env:GITHUB_ENV -Append
-            "extracted to $oldSrc" | Set-Content ab\old-build.log
-            dotnet build "$oldSrc\src\GeminiLauncher.csproj" -c Release *>> ab\old-build.log
-            "build exit=$LASTEXITCODE" | Add-Content ab\old-build.log
-          } catch { "EXCEPTION: $_" | Set-Content ab\old-build.log }
-      - name: Fallback OLD exe from run artifact
-        if: always()
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force ab | Out-Null
-          gh run download 40301648580 -n GeminiLauncher-exe -D oldexe *> ab\old-download.log
-          "exit=$LASTEXITCODE" | Add-Content ab\old-download.log
-          Get-ChildItem -Recurse oldexe -ErrorAction SilentlyContinue | ForEach-Object { "artifact: $($_.FullName)" } | Add-Content ab\old-download.log
-      - name: Diagnostics
-        if: always()
+        run: gh run download 40301648580 -n GeminiLauncher-exe -D oldexe
+      - name: A/B test
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force ab | Out-Null
           $out = New-Object System.Collections.Generic.List[string]
           function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
-          Log-Line "Windows: $((Get-CimInstance Win32_OperatingSystem).Caption) build $((Get-CimInstance Win32_OperatingSystem).BuildNumber)"
-
           function Run-One($exe, $tag) {
             if (-not (Test-Path $exe)) { Log-Line "$tag : exe missing ($exe)"; return }
             Remove-Item "$env:APPDATA\GeminiLauncher\error.log" -ErrorAction SilentlyContinue
@@ -64,32 +40,13 @@ jobs:
             Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep 2
           }
-
-          $newExe = "src\bin\Release\net48\GeminiLauncher.exe"
-          $oldExe = if ($env:OLDSRC -and (Test-Path "$env:OLDSRC\src\bin\Release\net48\GeminiLauncher.exe")) {
-            "$env:OLDSRC\src\bin\Release\net48\GeminiLauncher.exe"
-          } else { "oldexe\GeminiLauncher.exe" }
-
-          Log-Line "=== before Media Foundation install ==="
-          Run-One $newExe "NEW-before"
-          Run-One $oldExe "OLD-before"
-
-          Log-Line "=== installing Server-Media-Foundation ==="
-          try {
-            $r = Install-WindowsFeature Server-Media-Foundation
-            Log-Line "install: success=$($r.Success) restartNeeded=$($r.RestartNeeded) exitCode=$($r.ExitCode)"
-          } catch { Log-Line "install EXCEPTION: $_" }
-
-          Log-Line "=== after Media Foundation install ==="
-          Run-One $newExe "NEW-after"
-          Run-One $oldExe "OLD-after"
-
-          $out | Set-Content ab\diag-result.txt
-      - name: Publish results to a branch
-        if: always()
+          Run-One "src\bin\Release\net48\GeminiLauncher.exe" "NEW"
+          Run-One "oldexe\GeminiLauncher.exe" "OLD"
+          $out | Set-Content ab\ab-result.txt
+      - name: Publish result to a branch
         shell: pwsh
         run: |
           git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
-          git add -f ab
-          git commit -m "diag result" | Out-Null
+          git add -f ab/ab-result.txt
+          git commit -m "ab result" | Out-Null
           git push -f origin "HEAD:refs/heads/ci-ab-result"

@@ -148,8 +148,11 @@ namespace GeminiLauncher
         }
 
         /// <summary>
-        /// Browser folders to try, best first. An explicit folder bypasses a stale registry entry that points at a
-        /// deleted runtime; null means the loader's own (registry-based) discovery, as used by older builds.
+        /// Browser folders to try, best first. null means the loader's own registry-based discovery, which is the
+        /// proven path for Evergreen installs: passing an Evergreen version folder explicitly can hang the older
+        /// packed loader, so it stays first and explicit folders are only fallbacks (e.g. a stale registry entry
+        /// pointing at a deleted runtime). A complete portable ("Fixed Version") folder keeps the old behaviour of
+        /// being used directly, since explicit-folder launching is what Fixed Version packages are built for.
         /// </summary>
         static List<string> BrowserFolders()
         {
@@ -162,20 +165,12 @@ namespace GeminiLauncher
             }
 
             var fixedDir = FindFixedRuntime();
-            if (fixedDir != null && IsRuntimeComplete(fixedDir)) Add(fixedDir);
-            Add(FindRuntimeUnder(Path.Combine("Microsoft", "EdgeWebView", "Application")));
-            folders.Add(null);   // loader's registry-based discovery (the evergreen runtime Windows installed)
-            Add(FindRuntimeUnder(Path.Combine("Microsoft", "Edge", "Application"))); // last resort: an Edge browser install
-            if (fixedDir != null && !IsRuntimeComplete(fixedDir)) Add(fixedDir);      // last-ditch, in case our markers ever miss a layout change
+            if (fixedDir != null && IsRuntimeComplete(fixedDir)) Add(fixedDir);   // portable runtime: used directly, as before
+            folders.Add(null);                                                    // loader's registry-based discovery (healthy Evergreen PCs)
+            Add(FindRuntimeUnder(Path.Combine("Microsoft", "EdgeWebView", "Application"))); // stale registry? pick a healthy version folder
+            Add(FindRuntimeUnder(Path.Combine("Microsoft", "Edge", "Application")));         // last resort: an Edge browser install
+            if (fixedDir != null && !IsRuntimeComplete(fixedDir)) Add(fixedDir);             // last-ditch, in case our markers ever miss a layout change
             return folders;
-        }
-
-        /// <summary>First explicit candidate for the cheap availability check, or null to let the loader decide.</summary>
-        static string PreferredBrowserFolder()
-        {
-            foreach (var folder in BrowserFolders())
-                if (!string.IsNullOrEmpty(folder)) return folder;
-            return null;
         }
 
         /// <summary>True if some runtime folder exists even if it's too broken to launch (drives the failure wording).</summary>
@@ -244,9 +239,11 @@ namespace GeminiLauncher
             try
             {
                 EnsureLoader();
-                // Prefer a folder we've verified on disk: a stale registry entry can report a version whose files
-                // were deleted, which would otherwise pass this check and fail later with 0x80070002.
-                var v = CoreWebView2Environment.GetAvailableBrowserVersionString(PreferredBrowserFolder());
+                // Default (null) = the loader's registry-based discovery, the proven path for Evergreen installs.
+                // A portable Fixed Version folder is used directly when it still contains the files it needs.
+                var fixedDir = FindFixedRuntime();
+                var v = CoreWebView2Environment.GetAvailableBrowserVersionString(
+                    fixedDir != null && IsRuntimeComplete(fixedDir) ? fixedDir : null);
                 RuntimeAvailable = !string.IsNullOrEmpty(v);
             }
             catch (WebView2RuntimeNotFoundException) { RuntimeAvailable = false; }
