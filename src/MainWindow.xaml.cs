@@ -708,14 +708,16 @@ namespace GeminiLauncher
         {
             if (_google.FailMessage != null)
             {
-                GoogleMessage.Text = _google.FailMessage + "\n\nCtrl+Enter still opens Google in your browser.";
+                GoogleMessage.Text = _google.RuntimeMissing ? _google.FailMessage : _google.FailMessage + "\n\nCtrl+Enter still opens Google in your browser.";
                 GoogleInstallButton.Visibility = _google.RuntimeMissing ? Visibility.Visible : Visibility.Collapsed;
+                GoogleExpandButton.Visibility = Visibility.Collapsed;
                 GoogleStatus.Text = "";
             }
             else
             {
                 GoogleMessage.Text = "Loading Google…";
                 GoogleInstallButton.Visibility = Visibility.Collapsed;
+                GoogleExpandButton.Visibility = Visibility.Visible;
             }
         }
 
