@@ -77,6 +77,11 @@ namespace GeminiLauncher
 
             _hook = new InputHook { WinKeyEnabled = Settings.TakeOverWinKey, StartButtonEnabled = Settings.TakeOverStartButton };
             _hook.Triggered += () => Dispatcher.BeginInvoke(new Action(() => ShowLauncher(true)));
+            _hook.ClickedOutside += () => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                var lw = Launcher;
+                if (lw != null && lw.IsOpen && !lw.IsHiding && !lw.SuppressHide) HideLauncher();
+            }));
             _hook.Start();
 
             SetupTray();
@@ -190,6 +195,7 @@ namespace GeminiLauncher
                 return;
             }
             _trimTimer?.Stop();
+            if (_hook != null) _hook.WatchClicks = true;
             if (w.IsOpen && w.IsHiding)
             {
                 // re-opened while closing: reverse the slide
@@ -211,6 +217,7 @@ namespace GeminiLauncher
         {
             var w = Launcher;
             if (w == null || !w.IsOpen || w.IsHiding) return;
+            if (_hook != null) _hook.WatchClicks = false;
             w.SlideOut(() => { _trimTimer?.Stop(); _trimTimer?.Start(); });
         }
 

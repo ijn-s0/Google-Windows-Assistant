@@ -7,7 +7,7 @@ Add-Type -Namespace T -Name M -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
 [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
 '@
-$A = [System.Windows.Automation.AutomationElement]
+$UIA = [System.Windows.Automation.AutomationElement]
 $TS = [System.Windows.Automation.TreeScope]
 $results = New-Object System.Collections.Generic.List[string]
 $failed = $false
@@ -36,10 +36,16 @@ function Click([int]$x, [int]$y, [switch]$Right) {
   Start-Sleep -Milliseconds 600
 }
 function Center($el) { $r = $el.Current.BoundingRectangle; return @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
+function FindNow($scope, $name) {
+  $c = New-Object System.Windows.Automation.AndCondition(
+    (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $p.Id)),
+    (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $name)))
+  return $scope.FindFirst($TS::Descendants, $c)
+}
 function Find($scope, $name) {
   $c = New-Object System.Windows.Automation.AndCondition(
-    (New-Object System.Windows.Automation.PropertyCondition($A::ProcessIdProperty, $p.Id)),
-    (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, $name)))
+    (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $p.Id)),
+    (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $name)))
   for ($i = 0; $i -lt 20; $i++) { $e = $scope.FindFirst($TS::Descendants, $c); if ($e) { return $e }; Start-Sleep -Milliseconds 250 }
   return $null
 }
@@ -64,7 +70,7 @@ $lnk = $ws.CreateShortcut("$env:APPDATA\Microsoft\Windows\Recent\report-draft.tx
 
 $p = Start-Process $exe -ArgumentList @('--portable', '--show') -PassThru
 Start-Sleep 7
-$root = $A::RootElement
+$root = $UIA::RootElement
 Shot "0-start"
 
 # ---- 1. drag "Pin One" onto "Pin Three" ----
@@ -136,14 +142,30 @@ if ($doc) {
   Check 'removed file stays hidden' ($null -eq $gone -or $gone.Current.IsOffscreen) ''
 }
 
-# ---- 7. reopen: everything persisted ----
+# ---- 7. clicking outside closes the launcher ----
+Click 6 ([int]($scr.Height / 2))
+Start-Sleep 1
+Shot "7-clicked-outside"
+$still = FindNow $root 'Pin Two'
+Check 'click outside closes the launcher' ($null -eq $still -or $still.Current.IsOffscreen) ''
+
+# ---- 8. reopen: everything persisted ----
 Stop-Process $p -Force; Start-Sleep 1
 $p = Start-Process $exe -ArgumentList @('--portable', '--show') -PassThru
 Start-Sleep 7
-Shot "7-reopened"
+Shot "8-reopened"
 $s = Saved
 Check 'order persisted after restart' (($s.pins.name -join ', ') -eq 'Pin Two, Pin Four, Pin Three, Pin One') ($s.pins.name -join ', ')
 Check 'removed file not shown after restart' ($null -eq (Find $root 'report-draft.txt')) ''
+Stop-Process $p -Force -ErrorAction SilentlyContinue
+
+# ---- 9. typing: apps come before Google results ----
+$p = Start-Process $exe -ArgumentList @('--portable', '--query', 'microsoft') -PassThru
+Start-Sleep 8
+Shot "9-typing"
+$web = Find $root 'Search the web'; $apps = FindNow $root 'Apps'
+if ($web -and $apps) { Check 'apps listed above web results' ($apps.Current.BoundingRectangle.Y -lt $web.Current.BoundingRectangle.Y) '' }
+else { Write-Host "SKIP  apps-above-web (only one matching app on this runner)"; $results.Add('SKIP  apps above web') }
 Stop-Process $p -Force -ErrorAction SilentlyContinue
 
 $results | Set-Content shots/edit-test.txt

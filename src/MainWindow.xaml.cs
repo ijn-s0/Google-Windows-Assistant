@@ -524,17 +524,30 @@ namespace GeminiLauncher
                 appItems.Remove(best); pageItems.Remove(best); fileItems.Remove(best);
             }
 
-            // Web: Gemini + Google suggestions
+            // Local results first (apps, settings, files), like Windows search. Weak fuzzy app matches go below the web.
+            var strongApps = appItems.Where(a => a.Score >= 45).ToList();
+            var weakApps = appItems.Where(a => a.Score < 45).ToList();
+            var strongPages = pageItems.Where(p => p.Score >= 45).ToList();
+            var weakPages = pageItems.Where(p => p.Score < 45).ToList();
+            if (strongApps.Count > 0) { items.Add(ResultItem.Header("Apps")); items.AddRange(strongApps.Take(3)); }
+            if (strongPages.Count > 0) { items.Add(ResultItem.Header("Settings")); items.AddRange(strongPages.Take(2)); }
+            if (fileItems.Count > 0) { items.Add(ResultItem.Header("Documents & files")); items.AddRange(fileItems.Take(3)); }
+            bool anyLocal = strongApps.Count + strongPages.Count + fileItems.Count > 0;
+            if (def == null) def = strongApps.FirstOrDefault() ?? strongPages.FirstOrDefault();
+
+            // ...then the web: Gemini + Google suggestions (fewer when there are local results)
             items.Add(ResultItem.Header("Search the web"));
             var gem = new ResultItem { Kind = ItemKind.Gemini, Title = q, Target = q, Glyph = Glyphs.Sparkle, Subtitle = "Ask Gemini  ·  answers grounded in Google Search" };
             items.Add(gem);
             if (def == null) def = gem;
-            foreach (var s in _sugs.Where(s => !string.Equals(s.Trim(), q, StringComparison.OrdinalIgnoreCase)).Take(6))
+            foreach (var s in _sugs.Where(s => !string.Equals(s.Trim(), q, StringComparison.OrdinalIgnoreCase)).Take(anyLocal ? 3 : 6))
                 items.Add(new ResultItem { Kind = ItemKind.Suggestion, Title = s, Target = s, Glyph = Glyphs.Search });
 
-            if (appItems.Count > 0) { items.Add(ResultItem.Header("Apps")); items.AddRange(appItems.Take(4)); }
-            if (pageItems.Count > 0) { items.Add(ResultItem.Header("Settings")); items.AddRange(pageItems.Take(3)); }
-            if (fileItems.Count > 0) { items.Add(ResultItem.Header("Documents & files")); items.AddRange(fileItems.Take(6)); }
+            var more = strongApps.Skip(3).Concat(weakApps).Take(4).ToList();
+            if (more.Count > 0) { items.Add(ResultItem.Header("More apps")); items.AddRange(more); }
+            var morePages = strongPages.Skip(2).Concat(weakPages).Take(2).ToList();
+            if (morePages.Count > 0) { items.Add(ResultItem.Header("More settings")); items.AddRange(morePages); }
+            if (fileItems.Count > 3) { items.Add(ResultItem.Header("More files")); items.AddRange(fileItems.Skip(3).Take(4)); }
 
             _results.Clear();
             foreach (var it in items) _results.Add(it);
@@ -543,7 +556,8 @@ namespace GeminiLauncher
             if (_userNavigated && prevKey != null) sel = items.FirstOrDefault(i => !i.IsHeader && i.Kind + "|" + i.Target == prevKey);
             if (sel == null) { sel = def; _userNavigated = false; }
             ResultsList.SelectedItem = sel;
-            if (sel != null && items.IndexOf(sel) <= 2) ResultsList.ScrollIntoView(items[0]);
+            if (!_userNavigated && items.Count > 0) ResultsList.ScrollIntoView(items[0]);
+            else if (sel != null && items.IndexOf(sel) <= 2) ResultsList.ScrollIntoView(items[0]);
         }
 
         ResultItem Selected => ResultsList.SelectedItem as ResultItem;
@@ -1090,7 +1104,8 @@ namespace GeminiLauncher
 
         void Pins_LostMouseCapture(object sender, MouseEventArgs e)
         {
-            if (_dragging) EndPinDrag(true);
+            // Only our own capture ending counts: when the drag starts, the tile's LostMouseCapture bubbles up here too.
+            if (_dragging && e.OriginalSource == PinsList) EndPinDrag(true);
         }
 
         void EndPinDrag(bool commit)

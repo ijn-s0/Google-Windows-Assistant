@@ -16,6 +16,10 @@ namespace GeminiLauncher
     public sealed class InputHook : IDisposable
     {
         public event Action Triggered;
+        /// <summary>Raised (on a pool thread) for a mouse click on a window that isn't ours, while <see cref="WatchClicks"/> is on.</summary>
+        public event Action ClickedOutside;
+        public volatile bool WatchClicks;
+        static readonly uint MyPid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
         public volatile bool WinKeyEnabled = true;
         public volatile bool StartButtonEnabled = true;
 
@@ -140,6 +144,15 @@ namespace GeminiLauncher
                 {
                     _swallowUp = false;
                     return (IntPtr)1;
+                }
+                // Any button press outside the launcher (and its menus/dialogs) closes it, like Start.
+                // Works even when Windows didn't hand us activation, so the Deactivated event never comes.
+                if (WatchClicks && (msg == Native.WM_LBUTTONDOWN || msg == 0x0204 /*R*/ || msg == 0x0207 /*M*/ || msg == 0x020B /*X*/))
+                {
+                    var m = Marshal.PtrToStructure<Native.MSLLHOOKSTRUCT>(lParam);
+                    var root = Native.GetAncestor(Native.WindowFromPoint(m.pt), 2 /*GA_ROOT*/);
+                    Native.GetWindowThreadProcessId(root, out uint pid);
+                    if (pid != MyPid) ThreadPool.QueueUserWorkItem(_ => ClickedOutside?.Invoke());
                 }
             }
             return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
