@@ -8,20 +8,27 @@ on:
 jobs:
   ab:
     runs-on: windows-2025
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - name: Build NEW code
         run: dotnet build src/GeminiLauncher.csproj -c Release
       - name: Build OLD code (bec8170 from codeload)
+        if: always()
         continue-on-error: true
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force ab | Out-Null
-          Invoke-WebRequest "https://codeload.github.com/${{ github.repository }}/tar.gz/bec8170" -OutFile old.tar.gz
-          tar -xzf old.tar.gz
-          $oldSrc = (Get-ChildItem -Directory gemini-launcher-* | Select-Object -First 1).FullName
-          echo "OLDSRC=$oldSrc" | Out-File $env:GITHUB_ENV
-          dotnet build "$oldSrc\src\GeminiLauncher.csproj" -c Release *> ab\old-build.log
+          try {
+            Invoke-WebRequest "https://codeload.github.com/${{ github.repository }}/tar.gz/bec8170" -OutFile old.tar.gz
+            tar -xzf old.tar.gz
+            $oldSrc = (Get-ChildItem -Directory gemini-launcher-* | Select-Object -First 1).FullName
+            "OLDSRC=$oldSrc" | Out-File $env:GITHUB_ENV -Append
+            "extracted to $oldSrc" | Set-Content ab\old-build.log
+            dotnet build "$oldSrc\src\GeminiLauncher.csproj" -c Release *>> ab\old-build.log
+            "build exit=$LASTEXITCODE" | Add-Content ab\old-build.log
+          } catch { "EXCEPTION: $_" | Set-Content ab\old-build.log }
       - name: Fallback OLD exe from run artifact
         if: always()
         continue-on-error: true
@@ -29,7 +36,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force ab | Out-Null
           gh run download 40301648580 -n GeminiLauncher-exe -D oldexe *> ab\old-download.log
-          Get-ChildItem -Recurse oldexe | ForEach-Object { "artifact: $($_.FullName)" } | Add-Content ab\old-download.log
+          "exit=$LASTEXITCODE" | Add-Content ab\old-download.log
+          Get-ChildItem -Recurse oldexe -ErrorAction SilentlyContinue | ForEach-Object { "artifact: $($_.FullName)" } | Add-Content ab\old-download.log
       - name: Diagnostics
         if: always()
         shell: pwsh
@@ -37,35 +45,26 @@ jobs:
           New-Item -ItemType Directory -Force ab | Out-Null
           $out = New-Object System.Collections.Generic.List[string]
           function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
+          Log-Line "Windows: $((Get-CimInstance Win32_OperatingSystem).Caption) build $((Get-CimInstance Win32_OperatingSystem).BuildNumber)"
+          try { Get-WindowsFeature Server-Media-Foundation,Desktop-Experience | ForEach-Object { Log-Line "feature $($_.Name): $($_.InstallState)" } } catch { Log-Line "feature query n/a" }
 
           $app = "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application"
           $rt = (Get-ChildItem $app -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'msedgewebview2.exe') } | Select-Object -First 1).FullName
           Log-Line "RUNTIME FOLDER: $rt"
 
-          # 1. Standalone launch of the runtime engine, no host app
-          $udd = Join-Path $env:TEMP 'wv2standalone'
-          $sp = Start-Process (Join-Path $rt 'msedgewebview2.exe') `
-            -ArgumentList @("--user-data-dir=$udd", '--no-first-run', '--no-default-browser-check', '--disable-features=msEdgeHeadless', 'about:blank') -PassThru
-          Start-Sleep 6
-          $standalone = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue)
-          Log-Line "STANDALONE: msedgewebview2 count=$($standalone.Count) exited=$($sp.HasExited)$(if($sp.HasExited){" exitcode=$($sp.ExitCode)"})"
-          $standalone | Stop-Process -Force -ErrorAction SilentlyContinue
-          Start-Sleep 1
-
-          # 2. App launch with tight sampling to catch a crash loop
           function Run-One($exe, $tag) {
             if (-not (Test-Path $exe)) { Log-Line "$tag : exe missing ($exe)"; return }
             Remove-Item "$env:APPDATA\GeminiLauncher\error.log" -ErrorAction SilentlyContinue
             $p = Start-Process $exe -ArgumentList @('--portable', '--query', '"weather vancouver"') -PassThru
             $seen = 0
-            for ($i = 0; $i -lt 20; $i++) {
+            for ($i = 0; $i -lt 24; $i++) {
               Start-Sleep -Milliseconds 500
-              $n = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count
-              if ($n -gt 0) { $seen++ }
+              if (@(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count -gt 0) { $seen++ }
             }
-            Log-Line "$tag : samples-with-process=$seen/20 appExited=$($p.HasExited)"
-            $udd2 = "$env:LOCALAPPDATA\GeminiLauncher\WebView2"
-            if (Test-Path $udd2) { Log-Line "$tag : user-data files: $((Get-ChildItem $udd2 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { $_.FullName.Replace($udd2,'') }) -join '; ')" }
+            $proc = Get-Process GeminiLauncher -ErrorAction SilentlyContinue | Select-Object -First 1
+            Log-Line "$tag : wv2-samples=$seen/24 appExited=$($p.HasExited) appPath=$($proc.Path)"
+            $loader = "$env:LOCALAPPDATA\GeminiLauncher\WebView2Loader"
+            if (Test-Path $loader) { Log-Line "$tag : loader: $((Get-ChildItem $loader -Recurse | ForEach-Object { $_.FullName.Replace($loader,'') }) -join '; ')" }
             $log = "$env:APPDATA\GeminiLauncher\error.log"
             if (Test-Path $log) { Log-Line "--- $tag error.log ---"; Get-Content $log | ForEach-Object { Log-Line $_ } }
             Stop-Process $p -Force -ErrorAction SilentlyContinue
@@ -76,14 +75,12 @@ jobs:
           if ($env:OLDSRC) { Run-One "$env:OLDSRC\src\bin\Release\net48\GeminiLauncher.exe" "OLD-BUILD" }
           Run-One "oldexe\GeminiLauncher.exe" "OLD-ARTIFACT"
 
-          # 3. Crash events from the event log
           Log-Line "--- recent Application error events ---"
           try {
             Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 15 -ErrorAction Stop |
-              Where-Object { $_.Message -match 'webview|edge|GeminiLauncher' } |
-              ForEach-Object { Log-Line ("[" + $_.TimeCreated + "] " + ($_.Message -split "`n" | Select-Object -First 4) -join ' | ') }
+              Where-Object { $_.Message -match 'webview|edge|Gemini' } |
+              ForEach-Object { Log-Line ("[" + $_.TimeCreated + "] " + (($_.Message -split "`n" | Select-Object -First 3) -join ' | ')) }
           } catch { Log-Line "event log query failed: $_" }
-
           $out | Set-Content ab\diag-result.txt
       - name: Publish results to a branch
         if: always()
