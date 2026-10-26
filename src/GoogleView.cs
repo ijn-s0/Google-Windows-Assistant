@@ -149,10 +149,10 @@ namespace GeminiLauncher
 
         /// <summary>
         /// Browser folders to try, best first. null means the loader's own registry-based discovery, which is the
-        /// proven path for Evergreen installs: passing an Evergreen version folder explicitly can hang the older
-        /// packed loader, so it stays first and explicit folders are only fallbacks (e.g. a stale registry entry
-        /// pointing at a deleted runtime). A complete portable ("Fixed Version") folder keeps the old behaviour of
-        /// being used directly, since explicit-folder launching is what Fixed Version packages are built for.
+        /// proven default for Evergreen installs, so it stays ahead of explicit folders; the explicit candidates
+        /// are fallbacks for when registry discovery points at a deleted or gutted runtime. A complete portable
+        /// ("Fixed Version") folder keeps the old behaviour of being used directly, since explicit-folder
+        /// launching is what Fixed Version packages are built for.
         /// </summary>
         static List<string> BrowserFolders()
         {
@@ -420,21 +420,27 @@ namespace GeminiLauncher
             if (fixedDir != null) GrantSandboxAccess(fixedDir);
 
             // Try each candidate in turn. A registered runtime whose folder was deleted, or a half-extracted
-            // portable copy, fails here with file-not-found; another candidate (a healthy versioned install, or
-            // the loader's own discovery) may still work. Every failed attempt is written to error.log.
+            // portable copy, fails here with file-not-found; another candidate (the loader's own discovery, or a
+            // healthy versioned install) may still work. Every failed attempt is written to error.log.
             Exception lastError = null;
             WebView2 wv = null;
             foreach (var folder in BrowserFolders())
             {
                 if (gen != _gen) return;   // released while starting
                 WebView2 candidate = null;
+                bool added = false;
                 try
                 {
                     var env = await CoreWebView2Environment.CreateAsync(folder, dataDir, new CoreWebView2EnvironmentOptions());
                     if (gen != _gen) return;
                     candidate = new WebView2 { DefaultBackgroundColor = PageBackground(_dark), Focusable = true };
+                    // The WPF control must be in the visual tree before EnsureCoreWebView2Async: an unparented
+                    // WebView2 never gets its HWND and initialization would never complete (no error, just a hang).
+                    _wv = candidate;
+                    _host.Children.Add(candidate);
+                    added = true;
                     await candidate.EnsureCoreWebView2Async(env);
-                    if (gen != _gen) { try { candidate.Dispose(); } catch { } return; }
+                    if (gen != _gen) { _host.Children.Remove(candidate); try { candidate.Dispose(); } catch { } return; }
                     wv = candidate;
                     break;
                 }
@@ -443,13 +449,12 @@ namespace GeminiLauncher
                     lastError = ex;
                     App.LogError(new InvalidOperationException(
                         "WebView2 couldn't start with " + (folder ?? "the installed runtime") + ".", ex));
+                    if (added) { _host.Children.Remove(candidate); _wv = null; }
                     try { candidate?.Dispose(); } catch { }
                 }
             }
             if (wv == null) throw lastError ?? new WebView2RuntimeNotFoundException("No usable WebView2 Runtime was found.");
 
-            _wv = wv;
-            _host.Children.Add(wv);
             if (gen != _gen) return;
 
             var core = wv.CoreWebView2;

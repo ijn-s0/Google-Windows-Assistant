@@ -41,7 +41,7 @@ The WebView2 Runtime is separate from the Edge browser. Installing it doesn't br
 
 ### "Couldn't start the built-in browser" with `0x80070002`
 
-That error means a WebView2 Runtime is registered on the PC but its files are incomplete — a cleanup or Edge-removal tool deleted part of the install, or a Fixed Version extraction was interrupted. The launcher handles this automatically: it verifies that a runtime folder contains the files it actually needs (`msedgewebview2.exe`, `chrome.dll` and the `EBWebView` resources), skips any broken copy, and tries every other runtime it can find — a healthy versioned Evergreen install, the loader's own registry discovery, an Edge browser install, and your portable `WebView2Runtime` folder. Details of each failed attempt go to `%APPDATA%\GeminiLauncher\error.log`.
+That error means a WebView2 Runtime is registered on the PC but its files are incomplete — a cleanup or Edge-removal tool deleted part of the install, or a Fixed Version extraction was interrupted. The launcher handles this automatically: it verifies that a runtime folder contains the files it actually needs (`msedgewebview2.exe` and the `EBWebView` resource folder), skips any broken copy, and retries startup with every runtime it can find — the loader's own registry discovery first, then a healthy versioned Evergreen install, an Edge browser install, and your portable `WebView2Runtime` folder. Details of each failed attempt go to `%APPDATA%\GeminiLauncher\error.log`.
 
 If none of the copies work, the preview pane says so in plain language and shows **Get WebView2 from Microsoft**. Repair options:
 
