@@ -1,0 +1,69 @@
+name: abtest
+on:
+  push:
+    branches: [arena/912b55e1-gemini-launcher]
+  workflow_dispatch:
+jobs:
+  ab:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect WebView2 install
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ab | Out-Null
+          $info = New-Object System.Collections.Generic.List[string]
+          $keys = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+                  'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+                  'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $keys | ForEach-Object { $info.Add("REG $_ pv=$((Get-ItemProperty $_ -ErrorAction SilentlyContinue).pv)") }
+          foreach ($base in @("$env:ProgramFiles\Microsoft\EdgeWebView\Application",
+                              "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application",
+                              "$env:LOCALAPPDATA\Microsoft\EdgeWebView\Application")) {
+            $info.Add("BASE $base exists=$(Test-Path $base)")
+            if (Test-Path $base) {
+              Get-ChildItem $base -Directory | ForEach-Object {
+                $v = $_.FullName
+                $info.Add("  $($_.Name): exe=$(Test-Path (Join-Path $v 'msedgewebview2.exe')) chrome.dll=$(Test-Path (Join-Path $v 'chrome.dll')) EBWebView=$(Test-Path (Join-Path $v 'EBWebView'))")
+              }
+            }
+          }
+          $info | Set-Content ab\runtime-info.txt
+          $info
+      - name: Build NEW code
+        run: dotnet build src/GeminiLauncher.csproj -c Release
+      - name: Build OLD code (bec8170) in a worktree
+        shell: pwsh
+        run: |
+          git fetch origin bec8170
+          git worktree add ..\old bec8170
+          dotnet build ..\old\src\GeminiLauncher.csproj -c Release
+      - name: A/B launch and process counts
+        shell: pwsh
+        run: |
+          $out = New-Object System.Collections.Generic.List[string]
+          function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
+          function CountWv($exe, $tag) {
+            Remove-Item "$env:APPDATA\GeminiLauncher\error.log" -ErrorAction SilentlyContinue
+            $p = Start-Process $exe -ArgumentList @('--portable', '--query', '"weather vancouver"') -PassThru
+            Start-Sleep 20
+            $n = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count
+            Log-Line "$tag : msedgewebview2 count after 20s = $n; exited=$($p.HasExited)"
+            $log = "$env:APPDATA\GeminiLauncher\error.log"
+            if (Test-Path $log) { Log-Line "--- $tag error.log ---"; Get-Content $log | ForEach-Object { Log-Line $_ } }
+            Stop-Process $p -Force -ErrorAction SilentlyContinue
+            Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep 2
+          }
+          CountWv "src\bin\Release\net48\GeminiLauncher.exe" "NEW"
+          CountWv "..\old\src\bin\Release\net48\GeminiLauncher.exe" "OLD"
+          New-Item -ItemType Directory -Force ab | Out-Null
+          $out | Set-Content ab\ab-result.txt
+      - name: Push A/B result to a branch
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
+          git add -f ab/ab-result.txt
+          git commit -m "ab result" | Out-Null
+          git push -f origin "HEAD:refs/heads/ci-ab-result"
