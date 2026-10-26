@@ -73,6 +73,7 @@ namespace GeminiLauncher
             Launcher = new MainWindow();
             new WindowInteropHelper(Launcher).EnsureHandle();   // create HWND now so first open is instant
             EnsureDefaultPins();
+            Launcher.Prewarm();
 
             _hook = new InputHook { WinKeyEnabled = Settings.TakeOverWinKey, StartButtonEnabled = Settings.TakeOverStartButton };
             _hook.Triggered += () => Dispatcher.BeginInvoke(new Action(() => ShowLauncher(true)));
@@ -181,7 +182,7 @@ namespace GeminiLauncher
             if (now - _lastToggle < 150) return; // debounce double events
             _lastToggle = now;
 
-            if (w.IsVisible && !w.IsHiding)
+            if (w.IsOpen && !w.IsHiding)
             {
                 if (fromHook) { HideLauncher(); return; }
                 ForceForeground(w);
@@ -189,7 +190,7 @@ namespace GeminiLauncher
                 return;
             }
             _trimTimer?.Stop();
-            if (w.IsVisible && w.IsHiding)
+            if (w.IsOpen && w.IsHiding)
             {
                 // re-opened while closing: reverse the slide
                 ForceForeground(w);
@@ -198,6 +199,7 @@ namespace GeminiLauncher
                 return;
             }
             AppIndex.RefreshAsync();
+            w.EndPrewarm();
             w.PrepareForShow();
             w.Show();
             ForceForeground(w);
@@ -208,7 +210,7 @@ namespace GeminiLauncher
         public void HideLauncher()
         {
             var w = Launcher;
-            if (w == null || !w.IsVisible || w.IsHiding) return;
+            if (w == null || !w.IsOpen || w.IsHiding) return;
             w.SlideOut(() => { _trimTimer?.Stop(); _trimTimer?.Start(); });
         }
 

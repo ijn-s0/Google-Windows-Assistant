@@ -91,6 +91,7 @@ namespace GeminiLauncher
         bool _animating, _hiding;
         readonly System.Diagnostics.Stopwatch _sw = new System.Diagnostics.Stopwatch();
         int _fromY, _durMs;
+        double _elapsed, _lastTick;
         bool _slideOut;
         Action _onSlideDone;
         public bool IsHiding => _hiding;
@@ -170,6 +171,7 @@ namespace GeminiLauncher
             _durMs = ms;
             _onSlideDone = done;
             _sw.Restart();
+            _elapsed = 0; _lastTick = 0;
             if (!_animating) { _animating = true; CompositionTarget.Rendering += OnSlideFrame; }
             OnSlideFrame(null, EventArgs.Empty);
         }
@@ -179,7 +181,12 @@ namespace GeminiLauncher
             var hwnd = Hwnd;
             if (!Native.GetWindowRect(hwnd, out var r)) return;
             int w = r.right - r.left, h = r.bottom - r.top;
-            double p = _durMs <= 0 ? 1 : Math.Min(1, _sw.Elapsed.TotalMilliseconds / _durMs);
+            // Advance by real frame time, but never more than ~2 frames at once, so a slow first
+            // render can't make the slide skip straight to the end.
+            double now = _sw.Elapsed.TotalMilliseconds;
+            _elapsed += Math.Min(34, now - _lastTick);
+            _lastTick = now;
+            double p = _durMs <= 0 ? 1 : Math.Min(1, _elapsed / _durMs);
             int to = _slideOut ? OffY(h) : TargetY(h);
             // Enter: strong deceleration like Start (quartic ease-out). Exit: accelerate away (cubic ease-in).
             double k = _slideOut ? p * p * p : 1 - Math.Pow(1 - p, 4);
@@ -196,6 +203,28 @@ namespace GeminiLauncher
                 var d = _onSlideDone; _onSlideDone = null;
                 d?.Invoke();
             }
+        }
+
+        /// <summary>Render once off-screen at startup so the first open is instant and smooth.</summary>
+        bool _prewarming;
+        public bool IsOpen => IsVisible && !_prewarming;
+
+        public void Prewarm()
+        {
+            _prewarming = true;
+            Position();
+            ShowActivated = false;
+            Show();
+            Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+            {
+                if (_prewarming) { Hide(); EndPrewarm(); }
+            }));
+        }
+
+        public void EndPrewarm()
+        {
+            _prewarming = false;
+            ShowActivated = true;
         }
 
         public void SetQuery(string q)
