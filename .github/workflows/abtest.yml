@@ -1,4 +1,6 @@
 name: abtest
+permissions:
+  contents: write
 on:
   push:
     branches: [arena/912b55e1-gemini-launcher]
@@ -8,84 +10,69 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect WebView2 install
+      - name: Build NEW code
+        run: dotnet build src/GeminiLauncher.csproj -c Release
+      - name: Download OLD (bec8170) build artifact
+        continue-on-error: true
+        shell: pwsh
+        run: gh run download 40301648580 -n GeminiLauncher-exe -D oldexe
+      - name: A/B test
+        if: always()
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force ab | Out-Null
-          $info = New-Object System.Collections.Generic.List[string]
+          $out = New-Object System.Collections.Generic.List[string]
+          function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
+
           $keys = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
                   'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
                   'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
-          $keys | ForEach-Object { $info.Add("REG $_ pv=$((Get-ItemProperty $_ -ErrorAction SilentlyContinue).pv)") }
+          $keys | ForEach-Object { Log-Line "REG $_ pv=$((Get-ItemProperty $_ -ErrorAction SilentlyContinue).pv)" }
           foreach ($base in @("$env:ProgramFiles\Microsoft\EdgeWebView\Application",
                               "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application",
                               "$env:LOCALAPPDATA\Microsoft\EdgeWebView\Application")) {
-            $info.Add("BASE $base exists=$(Test-Path $base)")
+            Log-Line "BASE $base exists=$(Test-Path $base)"
             if (Test-Path $base) {
               Get-ChildItem $base -Directory | ForEach-Object {
                 $v = $_.FullName
-                $info.Add("  $($_.Name): exe=$(Test-Path (Join-Path $v 'msedgewebview2.exe')) chrome.dll=$(Test-Path (Join-Path $v 'chrome.dll')) EBWebView=$(Test-Path (Join-Path $v 'EBWebView'))")
+                Log-Line "  $($_.Name): exe=$(Test-Path (Join-Path $v 'msedgewebview2.exe')) chrome.dll=$(Test-Path (Join-Path $v 'chrome.dll')) EBWebView=$(Test-Path (Join-Path $v 'EBWebView'))"
               }
             }
           }
-          $info | Set-Content ab\runtime-info.txt
-          $info
-      - name: Build NEW code
-        run: dotnet build src/GeminiLauncher.csproj -c Release
-      - name: NEW launch test
-        if: always()
-        shell: pwsh
-        run: |
-          $out = New-Object System.Collections.Generic.List[string]
-          function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
-          $exe = "src\bin\Release\net48\GeminiLauncher.exe"
-          if (Test-Path $exe) {
+
+          function Run-One($exe, $tag) {
+            if (-not (Test-Path $exe)) { Log-Line "$tag : exe missing ($exe)"; return }
             Remove-Item "$env:APPDATA\GeminiLauncher\error.log" -ErrorAction SilentlyContinue
             $p = Start-Process $exe -ArgumentList @('--portable', '--query', '"weather vancouver"') -PassThru
-            Start-Sleep 20
-            $n = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count
-            Log-Line "NEW : msedgewebview2 count after 20s = $n; exited=$($p.HasExited)"
+            $elapsed = 0
+            foreach ($wait in 5, 5, 10, 10) {
+              Start-Sleep -Seconds $wait
+              $elapsed += $wait
+              $n = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count
+              Log-Line "$tag : t=${elapsed}s msedgewebview2=$n exited=$($p.HasExited)"
+            }
             $log = "$env:APPDATA\GeminiLauncher\error.log"
-            if (Test-Path $log) { Log-Line "--- NEW error.log ---"; Get-Content $log | ForEach-Object { Log-Line $_ } }
+            if (Test-Path $log) { Log-Line "--- $tag error.log ---"; Get-Content $log | ForEach-Object { Log-Line $_ } }
             Stop-Process $p -Force -ErrorAction SilentlyContinue
             Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep 2
-          } else { Log-Line "NEW : exe not built" }
-          New-Item -ItemType Directory -Force ab | Out-Null
+          }
+          Run-One "src\bin\Release\net48\GeminiLauncher.exe" "NEW"
+          Run-One "oldexe\GeminiLauncher.exe" "OLD"
           $out | Set-Content ab\ab-result.txt
-      - uses: actions/checkout@v4
-        if: always()
-        with:
-          ref: bec8170
-          path: old
-      - name: Build OLD code (bec8170)
-        if: always()
-        continue-on-error: true
-        run: dotnet build old/src/GeminiLauncher.csproj -c Release
-      - name: OLD launch test
+      - name: Publish result via Contents API
         if: always()
         shell: pwsh
         run: |
-          $out = Get-Content ab\ab-result.txt
-          function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
-          $exe = "old\src\bin\Release\net48\GeminiLauncher.exe"
-          if (Test-Path $exe) {
-            Remove-Item "$env:APPDATA\GeminiLauncher\error.log" -ErrorAction SilentlyContinue
-            $p = Start-Process $exe -ArgumentList @('--portable', '--query', '"weather vancouver"') -PassThru
-            Start-Sleep 20
-            $n = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count
-            Log-Line "OLD : msedgewebview2 count after 20s = $n; exited=$($p.HasExited)"
-            $log = "$env:APPDATA\GeminiLauncher\error.log"
-            if (Test-Path $log) { Log-Line "--- OLD error.log ---"; Get-Content $log | ForEach-Object { Log-Line $_ } }
-            Stop-Process $p -Force -ErrorAction SilentlyContinue
-            Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
-          } else { Log-Line "OLD : exe not built" }
-          $out | Set-Content ab\ab-result.txt
-      - name: Push A/B result to a branch
-        if: always()
-        shell: pwsh
-        run: |
-          git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
-          git add -f ab || true
-          git commit -m "ab result" || true
-          git push -f origin "HEAD:refs/heads/ci-ab-result"
+          $repo = '${{ github.repository }}'
+          $branch = 'ci-ab-result'
+          $mainSha = (gh api repos/$repo/git/ref/heads/main --jq .object.sha)
+          gh api repos/$repo/git/refs -f ref=refs/heads/$branch -f sha=$mainSha 2>$null | Out-Null
+          $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes('ab\ab-result.txt'))
+          $existing = gh api repos/$repo/contents/ab/ab-result.txt?ref=$branch --jq .sha 2>$null
+          if ($existing) {
+            gh api repos/$repo/contents/ab/ab-result.txt -X PUT -f message="ab result" -f content=$b64 -f branch=$branch -f sha=$existing | Out-Null
+          } else {
+            gh api repos/$repo/contents/ab/ab-result.txt -X PUT -f message="ab result" -f content=$b64 -f branch=$branch | Out-Null
+          }
+          Write-Host "published to $branch"
