@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>GeminiLauncher</AssemblyName>
+    <RootNamespace>GeminiLauncher</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+    <Product>Gemini Launcher</Product>
+    <Company>Gemini Launcher</Company>
+    <Description>Windows key launcher with Google autocomplete and Gemini answers</Description>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Prefer32Bit>false</Prefer32Bit>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Security" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="UIAutomationClient" />
+    <Reference Include="UIAutomationTypes" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="app.ico" />
+  </ItemGroup>
+</Project>
