@@ -1,6 +1,7 @@
 name: abtest
 permissions:
   contents: write
+  actions: read
 on:
   push:
     branches: [arena/912b55e1-gemini-launcher]
@@ -14,14 +15,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build NEW code
         run: dotnet build src/GeminiLauncher.csproj -c Release
-      - name: Build OLD code (bec8170 from codeload)
+      - name: Build OLD code (bec8170 from codeload, full SHA)
         if: always()
         continue-on-error: true
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force ab | Out-Null
           try {
-            Invoke-WebRequest "https://codeload.github.com/${{ github.repository }}/tar.gz/bec8170" -OutFile old.tar.gz
+            Invoke-WebRequest "https://codeload.github.com/${{ github.repository }}/tar.gz/bec8170383335165005bdcee932405249af6b01b" -OutFile old.tar.gz
             tar -xzf old.tar.gz
             $oldSrc = (Get-ChildItem -Directory gemini-launcher-* | Select-Object -First 1).FullName
             "OLDSRC=$oldSrc" | Out-File $env:GITHUB_ENV -Append
@@ -46,11 +47,6 @@ jobs:
           $out = New-Object System.Collections.Generic.List[string]
           function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
           Log-Line "Windows: $((Get-CimInstance Win32_OperatingSystem).Caption) build $((Get-CimInstance Win32_OperatingSystem).BuildNumber)"
-          try { Get-WindowsFeature Server-Media-Foundation,Desktop-Experience | ForEach-Object { Log-Line "feature $($_.Name): $($_.InstallState)" } } catch { Log-Line "feature query n/a" }
-
-          $app = "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application"
-          $rt = (Get-ChildItem $app -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'msedgewebview2.exe') } | Select-Object -First 1).FullName
-          Log-Line "RUNTIME FOLDER: $rt"
 
           function Run-One($exe, $tag) {
             if (-not (Test-Path $exe)) { Log-Line "$tag : exe missing ($exe)"; return }
@@ -61,26 +57,33 @@ jobs:
               Start-Sleep -Milliseconds 500
               if (@(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count -gt 0) { $seen++ }
             }
-            $proc = Get-Process GeminiLauncher -ErrorAction SilentlyContinue | Select-Object -First 1
-            Log-Line "$tag : wv2-samples=$seen/24 appExited=$($p.HasExited) appPath=$($proc.Path)"
-            $loader = "$env:LOCALAPPDATA\GeminiLauncher\WebView2Loader"
-            if (Test-Path $loader) { Log-Line "$tag : loader: $((Get-ChildItem $loader -Recurse | ForEach-Object { $_.FullName.Replace($loader,'') }) -join '; ')" }
+            Log-Line "$tag : wv2-samples=$seen/24 appExited=$($p.HasExited)"
             $log = "$env:APPDATA\GeminiLauncher\error.log"
-            if (Test-Path $log) { Log-Line "--- $tag error.log ---"; Get-Content $log | ForEach-Object { Log-Line $_ } }
+            if (Test-Path $log) { Log-Line "--- $tag error.log ---"; Get-Content $log | Select-Object -First 8 | ForEach-Object { Log-Line $_ } }
             Stop-Process $p -Force -ErrorAction SilentlyContinue
             Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep 2
           }
-          Run-One "src\bin\Release\net48\GeminiLauncher.exe" "NEW"
-          if ($env:OLDSRC) { Run-One "$env:OLDSRC\src\bin\Release\net48\GeminiLauncher.exe" "OLD-BUILD" }
-          Run-One "oldexe\GeminiLauncher.exe" "OLD-ARTIFACT"
 
-          Log-Line "--- recent Application error events ---"
+          $newExe = "src\bin\Release\net48\GeminiLauncher.exe"
+          $oldExe = if ($env:OLDSRC -and (Test-Path "$env:OLDSRC\src\bin\Release\net48\GeminiLauncher.exe")) {
+            "$env:OLDSRC\src\bin\Release\net48\GeminiLauncher.exe"
+          } else { "oldexe\GeminiLauncher.exe" }
+
+          Log-Line "=== before Media Foundation install ==="
+          Run-One $newExe "NEW-before"
+          Run-One $oldExe "OLD-before"
+
+          Log-Line "=== installing Server-Media-Foundation ==="
           try {
-            Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 15 -ErrorAction Stop |
-              Where-Object { $_.Message -match 'webview|edge|Gemini' } |
-              ForEach-Object { Log-Line ("[" + $_.TimeCreated + "] " + (($_.Message -split "`n" | Select-Object -First 3) -join ' | ')) }
-          } catch { Log-Line "event log query failed: $_" }
+            $r = Install-WindowsFeature Server-Media-Foundation
+            Log-Line "install: success=$($r.Success) restartNeeded=$($r.RestartNeeded) exitCode=$($r.ExitCode)"
+          } catch { Log-Line "install EXCEPTION: $_" }
+
+          Log-Line "=== after Media Foundation install ==="
+          Run-One $newExe "NEW-after"
+          Run-One $oldExe "OLD-after"
+
           $out | Set-Content ab\diag-result.txt
       - name: Publish results to a branch
         if: always()
