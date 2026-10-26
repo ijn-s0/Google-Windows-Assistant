@@ -12,10 +12,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build NEW code
         run: dotnet build src/GeminiLauncher.csproj -c Release
-      - name: Download OLD (bec8170) build artifact
-        continue-on-error: true
+      - name: Build OLD code (bec8170 from codeload)
         shell: pwsh
-        run: gh run download 40301648580 -n GeminiLauncher-exe -D oldexe
+        run: |
+          Invoke-WebRequest "https://codeload.github.com/${{ github.repository }}/tar.gz/bec8170" -OutFile old.tar.gz
+          tar -xzf old.tar.gz
+          $oldSrc = (Get-ChildItem -Directory gemini-launcher-* | Select-Object -First 1).FullName
+          echo "OLDSRC=$oldSrc" | Out-File $env:GITHUB_ENV
+          dotnet build "$oldSrc\src\GeminiLauncher.csproj" -c Release
       - name: A/B test
         if: always()
         shell: pwsh
@@ -24,21 +28,17 @@ jobs:
           $out = New-Object System.Collections.Generic.List[string]
           function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
 
-          $keys = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
-                  'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
-                  'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
-          $keys | ForEach-Object { Log-Line "REG $_ pv=$((Get-ItemProperty $_ -ErrorAction SilentlyContinue).pv)" }
-          foreach ($base in @("$env:ProgramFiles\Microsoft\EdgeWebView\Application",
-                              "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application",
-                              "$env:LOCALAPPDATA\Microsoft\EdgeWebView\Application")) {
-            Log-Line "BASE $base exists=$(Test-Path $base)"
-            if (Test-Path $base) {
-              Get-ChildItem $base -Directory | ForEach-Object {
-                $v = $_.FullName
-                Log-Line "  $($_.Name): exe=$(Test-Path (Join-Path $v 'msedgewebview2.exe')) chrome.dll=$(Test-Path (Join-Path $v 'chrome.dll')) EBWebView=$(Test-Path (Join-Path $v 'EBWebView'))"
-              }
-            }
-          }
+          $app = "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application"
+          $rt = (Get-ChildItem $app -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'msedgewebview2.exe') } | Select-Object -First 1).FullName
+          Log-Line "RUNTIME FOLDER: $rt"
+          Log-Line "--- version folder contents ---"
+          Get-ChildItem $rt | ForEach-Object { Log-Line ("  " + $(if ($_.PSIsContainer) { '[D] ' } else { '    ' }) + $_.Name) }
+          try {
+            $vp = Start-Process (Join-Path $rt 'msedgewebview2.exe') -ArgumentList '--version' -NoNewWindow -PassThru -RedirectStandardOutput ab\wv-ver.txt -RedirectStandardError ab\wv-err.txt
+            if (-not $vp.WaitForExit(15000)) { Log-Line "msedgewebview2 --version: TIMEOUT (did not exit in 15s)"; $vp.Kill() }
+            else { Log-Line "msedgewebview2 --version (exit $($vp.ExitCode)): $((Get-Content ab\wv-ver.txt -Raw) -replace "`r?`n",' ')" }
+            if (Test-Path ab\wv-err.txt) { $e = Get-Content ab\wv-err.txt -Raw; if ($e) { Log-Line "stderr: $e" } }
+          } catch { Log-Line "msedgewebview2 --version threw: $_" }
 
           function Run-One($exe, $tag) {
             if (-not (Test-Path $exe)) { Log-Line "$tag : exe missing ($exe)"; return }
@@ -58,7 +58,7 @@ jobs:
             Start-Sleep 2
           }
           Run-One "src\bin\Release\net48\GeminiLauncher.exe" "NEW"
-          Run-One "oldexe\GeminiLauncher.exe" "OLD"
+          if ($env:OLDSRC) { Run-One "$env:OLDSRC\src\bin\Release\net48\GeminiLauncher.exe" "OLD" }
           $out | Set-Content ab\ab-result.txt
       - name: Publish result to a branch
         if: always()

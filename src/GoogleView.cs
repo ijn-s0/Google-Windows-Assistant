@@ -101,14 +101,14 @@ namespace GeminiLauncher
         /// <summary>
         /// A folder that merely contains msedgewebview2.exe isn't necessarily launchable: cleanup/Edge-removal tools
         /// and interrupted CAB extractions can leave the exe while deleting other files, and the browser then fails
-        /// to start with HRESULT 0x80070002 (file not found). These entries ship in every WebView2/Edge release.
+        /// to start with HRESULT 0x80070002 (file not found). The exe plus the EBWebView resource folder ship in
+        /// every WebView2/Edge release (the engine DLL's name has changed between releases, so don't rely on it).
         /// </summary>
         static bool IsRuntimeComplete(string dir)
         {
             try
             {
                 return File.Exists(Path.Combine(dir, "msedgewebview2.exe"))
-                    && File.Exists(Path.Combine(dir, "chrome.dll"))
                     && Directory.Exists(Path.Combine(dir, "EBWebView"));
             }
             catch { return false; }
