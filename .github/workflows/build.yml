@@ -92,6 +92,26 @@ jobs:
           RunShot "no-webview2-web" @('--portable', '--query', '"weather vancouver"')
           RunShot "no-webview2-google-row" @('--portable', '--query', '"weather vancouver"') 9 '{DOWN}'
           Remove-Item Env:GEMINILAUNCHER_NO_WEBVIEW2
+          # Broken portable runtime: msedgewebview2.exe present but chrome.dll/EBWebView missing.
+          # The old build failed here with HRESULT 0x80070002; now the launcher skips it and falls
+          # back to the healthy Evergreen install, so WebView2 processes must still start.
+          $broken = Join-Path $env:LOCALAPPDATA 'GeminiLauncher\WebView2Runtime\99.0.0.0'
+          New-Item -ItemType Directory -Force $broken | Out-Null
+          $wvRoot = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeWebView\Application'
+          if (-not (Test-Path $wvRoot)) { $wvRoot = Join-Path $env:ProgramFiles 'Microsoft\EdgeWebView\Application' }
+          $realWv = Get-ChildItem $wvRoot -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName 'msedgewebview2.exe') } | Select-Object -First 1
+          if (-not $realWv) { throw "No installed WebView2 runtime found under $wvRoot" }
+          Copy-Item (Join-Path $realWv.FullName 'msedgewebview2.exe') $broken
+          $p = Start-Process $exe -ArgumentList @('--portable', '--query', '"hello neighbour song"') -PassThru
+          Start-Sleep 16
+          $wvProcs = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue)
+          if (-not $wvProcs.Count) { throw 'WebView2 never started: the broken portable runtime was not skipped' }
+          "broken-runtime: $($wvProcs.Count) WebView2 processes started via the fallback runtime" | Write-Host
+          Shot 'broken-runtime-web'
+          if ($p.HasExited) { throw "launcher exited early with $($p.ExitCode)" }
+          Stop-Process $p -Force -ErrorAction SilentlyContinue
+          Start-Sleep 1
           # Turn on "Animate controls and elements inside windows" (off by default on Windows Server)
           Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint a, uint b, IntPtr c, uint d);'
           [W.U]::SystemParametersInfo(0x1043, 0, [IntPtr]1, 3) | Out-Null

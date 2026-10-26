@@ -39,6 +39,17 @@ The WebView2 Runtime is separate from the Edge browser. Installing it doesn't br
    ```
    The launcher finds it there automatically and sets the folder permissions it needs. This copy doesn't update itself, so replace it with a newer version now and then for security fixes. The browser starts when you begin typing and shuts down after the launcher has been closed for 5 minutes, so it doesn't use memory while idle. Its cookies (such as Google's consent choice) are kept in `%LOCALAPPDATA%\GeminiLauncher\WebView2`.
 
+### "Couldn't start the built-in browser" with `0x80070002`
+
+That error means a WebView2 Runtime is registered on the PC but its files are incomplete — a cleanup or Edge-removal tool deleted part of the install, or a Fixed Version extraction was interrupted. The launcher handles this automatically: it verifies that a runtime folder contains the files it actually needs (`msedgewebview2.exe`, `chrome.dll` and the `EBWebView` resources), skips any broken copy, and tries every other runtime it can find — a healthy versioned Evergreen install, the loader's own registry discovery, an Edge browser install, and your portable `WebView2Runtime` folder. Details of each failed attempt go to `%APPDATA%\GeminiLauncher\error.log`.
+
+If none of the copies work, the preview pane says so in plain language and shows **Get WebView2 from Microsoft**. Repair options:
+
+1. Reinstall the Evergreen Runtime from [Microsoft's WebView2 page](https://developer.microsoft.com/microsoft-edge/webview2/) (it repairs the broken files and doesn't bring Edge back), then reopen the launcher.
+2. Or replace the contents of `%LOCALAPPDATA%\GeminiLauncher\WebView2Runtime` with a freshly extracted Fixed Version package (commands above).
+
+Until it's repaired, **Enter** or **Ctrl+Enter** still opens Google in your default browser.
+
 It looks like Windows 11: it slides up from behind the taskbar like Start, with a system acrylic backdrop, rounded corners, Segoe UI Variable, your accent color, and it switches live between light and dark mode. On Windows 10 it uses acrylic blur. If transparency effects are off in Windows, it uses solid colors.
 
 ## Install

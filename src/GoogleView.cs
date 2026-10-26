@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.AccessControl;
@@ -69,6 +70,13 @@ namespace GeminiLauncher
             "Google results need the Microsoft Edge WebView2 Runtime, and it isn't on this PC. It's separate from the Edge browser: " +
             "installing it doesn't bring Edge back. Until then, Enter opens Google in your browser.";
 
+        // Shown when a runtime folder is present but won't launch (files deleted by a cleanup/Edge-removal tool,
+        // or an interrupted Fixed Version extraction): the same repair steps as a missing runtime.
+        const string BrokenMessage =
+            "The Microsoft Edge WebView2 Runtime on this PC is missing files, so the built-in browser couldn't start " +
+            "(a cleanup or Edge-removal tool is the usual cause). Reinstalling the runtime fixes it. It's separate from " +
+            "the Edge browser, so Edge doesn't come back. Until then, Enter opens Google in your browser.";
+
         static void EnsureLoader()
         {
             if (_loaderSet) return;
@@ -88,6 +96,130 @@ namespace GeminiLauncher
                     .FirstOrDefault(d => File.Exists(Path.Combine(d, "msedgewebview2.exe")));
             }
             catch { return null; }
+        }
+
+        /// <summary>
+        /// A folder that merely contains msedgewebview2.exe isn't necessarily launchable: cleanup/Edge-removal tools
+        /// and interrupted CAB extractions can leave the exe while deleting other files, and the browser then fails
+        /// to start with HRESULT 0x80070002 (file not found). These entries ship in every WebView2/Edge release.
+        /// </summary>
+        static bool IsRuntimeComplete(string dir)
+        {
+            try
+            {
+                return File.Exists(Path.Combine(dir, "msedgewebview2.exe"))
+                    && File.Exists(Path.Combine(dir, "chrome.dll"))
+                    && Directory.Exists(Path.Combine(dir, "EBWebView"));
+            }
+            catch { return false; }
+        }
+
+        static IEnumerable<string> InstallRoots()
+        {
+            var roots = new List<string>();
+            void Add(string p)
+            {
+                if (!string.IsNullOrEmpty(p) && !roots.Contains(p, StringComparer.OrdinalIgnoreCase)) roots.Add(p);
+            }
+            Add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
+            Add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86));   // empty on 32-bit Windows
+            Add(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)); // per-user installs
+            return roots;
+        }
+
+        /// <summary>Highest complete version folder under the standard install roots (e.g. Microsoft\EdgeWebView\Application).</summary>
+        static string FindRuntimeUnder(string appRelative)
+        {
+            string best = null;
+            Version bestVersion = null;
+            foreach (var root in InstallRoots())
+            {
+                string[] versionDirs;
+                try { versionDirs = Directory.GetDirectories(Path.Combine(root, appRelative)); }
+                catch { continue; }   // folder not present or no access
+                foreach (var dir in versionDirs)
+                {
+                    if (!Version.TryParse(Path.GetFileName(dir), out var version)) continue;   // skips non-version folders
+                    if (!IsRuntimeComplete(dir)) continue;
+                    if (best == null || version > bestVersion) { best = dir; bestVersion = version; }
+                }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Browser folders to try, best first. An explicit folder bypasses a stale registry entry that points at a
+        /// deleted runtime; null means the loader's own (registry-based) discovery, as used by older builds.
+        /// </summary>
+        static List<string> BrowserFolders()
+        {
+            var folders = new List<string>();
+            void Add(string folder)
+            {
+                if (string.IsNullOrEmpty(folder)) return;
+                try { folder = Path.GetFullPath(folder).TrimEnd('\\'); } catch { return; }
+                if (!folders.Contains(folder, StringComparer.OrdinalIgnoreCase)) folders.Add(folder);
+            }
+
+            var fixedDir = FindFixedRuntime();
+            if (fixedDir != null && IsRuntimeComplete(fixedDir)) Add(fixedDir);
+            Add(FindRuntimeUnder(Path.Combine("Microsoft", "EdgeWebView", "Application")));
+            folders.Add(null);   // loader's registry-based discovery (the evergreen runtime Windows installed)
+            Add(FindRuntimeUnder(Path.Combine("Microsoft", "Edge", "Application"))); // last resort: an Edge browser install
+            if (fixedDir != null && !IsRuntimeComplete(fixedDir)) Add(fixedDir);      // last-ditch, in case our markers ever miss a layout change
+            return folders;
+        }
+
+        /// <summary>First explicit candidate for the cheap availability check, or null to let the loader decide.</summary>
+        static string PreferredBrowserFolder()
+        {
+            foreach (var folder in BrowserFolders())
+                if (!string.IsNullOrEmpty(folder)) return folder;
+            return null;
+        }
+
+        /// <summary>True if some runtime folder exists even if it's too broken to launch (drives the failure wording).</summary>
+        static bool AnyRuntimeOnDisk()
+        {
+            try
+            {
+                if (FindFixedRuntime() != null) return true;
+                foreach (var root in InstallRoots())
+                    foreach (var rel in new[] { Path.Combine("Microsoft", "EdgeWebView", "Application"),
+                                                Path.Combine("Microsoft", "Edge", "Application") })
+                    {
+                        var baseDir = Path.Combine(root, rel);
+                        if (!Directory.Exists(baseDir)) continue;
+                        string[] subs;
+                        try { subs = Directory.GetDirectories(baseDir); } catch { continue; }
+                        if (subs.Any(d => File.Exists(Path.Combine(d, "msedgewebview2.exe")))) return true;
+                    }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>File-not-found class failures (HRESULT 0x80070002/0x80070003), whatever wrapper the SDK put on them.</summary>
+        static bool IsFileNotFoundError(Exception ex)
+        {
+            if (ex is WebView2RuntimeNotFoundException || ex is FileNotFoundException || ex is DirectoryNotFoundException)
+                return true;
+            var hr = (uint)ex.HResult;
+            return hr == 0x80070002u /*ERROR_FILE_NOT_FOUND*/ || hr == 0x80070003u /*ERROR_PATH_NOT_FOUND*/;
+        }
+
+        /// <summary>The browser's cookie/cache folder, with a temp fallback if the normal location can't be created.</summary>
+        static string CreateUserDataDir()
+        {
+            var preferred = Path.Combine(WebView2Deps.DataRoot, "WebView2");
+            try { Directory.CreateDirectory(preferred); return preferred; }
+            catch (Exception ex)
+            {
+                App.LogError(ex);
+                var fallback = Path.Combine(Path.GetTempPath(), "GeminiLauncher", "WebView2");
+                Directory.CreateDirectory(fallback);
+                return fallback;
+            }
         }
 
         /// <summary>The browser's sandboxed processes need read access to a portable runtime folder.</summary>
@@ -112,7 +244,9 @@ namespace GeminiLauncher
             try
             {
                 EnsureLoader();
-                var v = CoreWebView2Environment.GetAvailableBrowserVersionString(FindFixedRuntime());
+                // Prefer a folder we've verified on disk: a stale registry entry can report a version whose files
+                // were deleted, which would otherwise pass this check and fail later with 0x80070002.
+                var v = CoreWebView2Environment.GetAvailableBrowserVersionString(PreferredBrowserFolder());
                 RuntimeAvailable = !string.IsNullOrEmpty(v);
             }
             catch (WebView2RuntimeNotFoundException) { RuntimeAvailable = false; }
@@ -127,6 +261,8 @@ namespace GeminiLauncher
             _release.Stop();
             if (RuntimeAvailable == false && _wv == null)
             {
+                // CheckRuntime (or the test env var) says there's no usable runtime. The more specific
+                // "broken installation" wording is only used when a real launch attempt fails in InitAsync.
                 if (FailMessage == null) { FailMessage = MissingMessage; RuntimeMissing = true; Failed?.Invoke(); }
                 return;
             }
@@ -257,9 +393,17 @@ namespace GeminiLauncher
                 if (gen != _gen) return;   // released while starting: not an error
                 var wv = _wv; _wv = null; _ready = false; _init = null;
                 if (wv != null) { _host.Children.Remove(wv); try { wv.Dispose(); } catch { } }
-                RuntimeMissing = ex is WebView2RuntimeNotFoundException || ex.GetType().Name == "WebView2RuntimeNotFoundException";
-                if (RuntimeMissing) RuntimeAvailable = false;
-                FailMessage = RuntimeMissing ? MissingMessage : "Couldn't start the built-in browser: " + ex.Message;
+                RuntimeMissing = ex is WebView2RuntimeNotFoundException || ex.GetType().Name == "WebView2RuntimeNotFoundException"
+                    || IsFileNotFoundError(ex);
+                if (RuntimeMissing)
+                {
+                    RuntimeAvailable = false;
+                    // Every candidate failed with a missing-file error: either nothing is installed, or the
+                    // installation is gutted. The repair steps are the same; only the wording differs.
+                    FailMessage = AnyRuntimeOnDisk() ? BrokenMessage : MissingMessage;
+                }
+                else
+                    FailMessage = "Couldn't start the built-in browser: " + ex.Message;
                 App.LogError(ex);
                 StatusChanged?.Invoke("");
                 Failed?.Invoke();
@@ -274,18 +418,42 @@ namespace GeminiLauncher
         async Task CreateAsync(int gen)
         {
             EnsureLoader();
-            var dataDir = Path.Combine(WebView2Deps.DataRoot, "WebView2");
-            Directory.CreateDirectory(dataDir);
+            var dataDir = CreateUserDataDir();
             var fixedDir = FindFixedRuntime();
             if (fixedDir != null) GrantSandboxAccess(fixedDir);
-            var env = await CoreWebView2Environment.CreateAsync(fixedDir, dataDir, new CoreWebView2EnvironmentOptions());
-            if (gen != _gen) return;
 
-            var wv = new WebView2 { DefaultBackgroundColor = PageBackground(_dark), Focusable = true };
+            // Try each candidate in turn. A registered runtime whose folder was deleted, or a half-extracted
+            // portable copy, fails here with file-not-found; another candidate (a healthy versioned install, or
+            // the loader's own discovery) may still work. Every failed attempt is written to error.log.
+            Exception lastError = null;
+            WebView2 wv = null;
+            foreach (var folder in BrowserFolders())
+            {
+                if (gen != _gen) return;   // released while starting
+                WebView2 candidate = null;
+                try
+                {
+                    var env = await CoreWebView2Environment.CreateAsync(folder, dataDir, new CoreWebView2EnvironmentOptions());
+                    if (gen != _gen) return;
+                    candidate = new WebView2 { DefaultBackgroundColor = PageBackground(_dark), Focusable = true };
+                    await candidate.EnsureCoreWebView2Async(env);
+                    if (gen != _gen) { try { candidate.Dispose(); } catch { } return; }
+                    wv = candidate;
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    App.LogError(new InvalidOperationException(
+                        "WebView2 couldn't start with " + (folder ?? "the installed runtime") + ".", ex));
+                    try { candidate?.Dispose(); } catch { }
+                }
+            }
+            if (wv == null) throw lastError ?? new WebView2RuntimeNotFoundException("No usable WebView2 Runtime was found.");
+
             _wv = wv;
             _host.Children.Add(wv);
-            await wv.EnsureCoreWebView2Async(env);
-            if (gen != _gen || _wv != wv) return;   // released while starting
+            if (gen != _gen) return;
 
             var core = wv.CoreWebView2;
             var st = core.Settings;
