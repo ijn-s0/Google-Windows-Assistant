@@ -82,6 +82,7 @@ namespace GeminiLauncher
         public static readonly Geometry Gear = G("M8,5.5 A2.5,2.5 0 1 1 7.99,5.5 Z M8,1 L8,3 M8,13 L8,15 M1,8 L3,8 M13,8 L15,8 M3,3 L4.4,4.4 M11.6,11.6 L13,13 M3,13 L4.4,11.6 M11.6,4.4 L13,3");
         public static readonly Geometry Plus = G("M8,2 L8,14 M2,8 L14,8");
         public static readonly Geometry Doc = G("M3.5,1.5 L10,1.5 L12.5,4 L12.5,14.5 L3.5,14.5 Z M10,1.5 L10,4 L12.5,4");
+        public static readonly Geometry Pin = G("M8,15 C8,15 2.5,9.5 2.5,6 A5.5,5.5 0 0 1 13.5,6 C13.5,9.5 8,15 8,15 Z M8,4 A2,2 0 1 1 7.99,4 Z");
         public static readonly Geometry Link = G("M6.5,9.5 L9.5,6.5 M7,4.5 L9,2.5 A2.8,2.8 0 0 1 13.5,7 L11.5,9 M9,11.5 L7,13.5 A2.8,2.8 0 0 1 2.5,9 L4.5,7");
     }
 }

@@ -70,6 +70,57 @@
                     </Grid>
                 </Border>
                 <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="220"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Thinking level"/>
+                            <TextBlock Style="{StaticResource Desc}" Text="More thinking gives better answers to harder questions but takes longer."/>
+                        </StackPanel>
+                        <ComboBox x:Name="ThinkingBox" Grid.Column="1" Style="{StaticResource FluentCombo}" VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="Grounding tools"/>
+                        <TextBlock Style="{StaticResource Desc}" Text="All three can be on together. If a model doesn't accept a combination, the launcher automatically retries without the conflicting tool."/>
+                        <CheckBox x:Name="ToolSearchBox" Style="{StaticResource ToggleSwitch}" Margin="0,12,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Google Search"/>
+                                <TextBlock Style="{StaticResource Desc}" Text="Up-to-date facts and news, with sources."/>
+                            </StackPanel>
+                        </CheckBox>
+                        <CheckBox x:Name="ToolMapsBox" Style="{StaticResource ToggleSwitch}" Margin="0,12,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Google Maps"/>
+                                <TextBlock Style="{StaticResource Desc}" Text="Places, businesses, hours, ratings and directions. Results link to Google Maps."/>
+                            </StackPanel>
+                        </CheckBox>
+                        <CheckBox x:Name="LocationBox" Style="{StaticResource ToggleSwitch}" Margin="24,10,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Use my location for Google Maps"/>
+                                <TextBlock Style="{StaticResource Desc}" Text="Sends your approximate location (about 100 m) with Maps questions so &quot;near me&quot; works. Uses Windows location services."/>
+                            </StackPanel>
+                        </CheckBox>
+                        <CheckBox x:Name="ToolUrlBox" Style="{StaticResource ToggleSwitch}" Margin="0,12,0,0">
+                            <StackPanel>
+                                <TextBlock Text="URL context"/>
+                                <TextBlock Style="{StaticResource Desc}" Text="Reads web pages you paste or mention, so Gemini can summarize them or answer questions about them."/>
+                            </StackPanel>
+                        </CheckBox>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <CheckBox x:Name="SafetyBox" Style="{StaticResource ToggleSwitch}">
+                        <StackPanel>
+                            <TextBlock Text="Safety filters"/>
+                            <TextBlock Style="{StaticResource Desc}" Text="Off: every adjustable Gemini safety filter (harassment, hate speech, sexually explicit, dangerous content, jailbreak) is set to OFF. Google's built-in protections still apply."/>
+                        </StackPanel>
+                    </CheckBox>
+                </Border>
+                <Border Style="{StaticResource Card}">
                     <StackPanel>
                         <CheckBox x:Name="InstantBox" Style="{StaticResource ToggleSwitch}">
                             <StackPanel>

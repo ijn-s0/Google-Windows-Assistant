@@ -13,6 +13,23 @@ namespace GeminiLauncher
         Settings S => _app.Settings;
         readonly bool _wasElevatedTask;
         static readonly int[] Delays = { 500, 700, 900, 1200, 1600 };
+        static readonly (string label, string val)[] Thinkings =
+        {
+            ("Minimal", "minimal"), ("Low", "low"), ("Medium", "medium"), ("High", "high"), ("Model default", "default")
+        };
+
+        string SelectedThinking => (ThinkingBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "medium";
+
+        GeminiOptions BuildOptions(string model)
+        {
+            var o = new GeminiOptions
+            {
+                Model = model, Thinking = SelectedThinking,
+                Search = ToolSearchBox.IsChecked == true, Maps = ToolMapsBox.IsChecked == true, UrlContext = ToolUrlBox.IsChecked == true,
+                SafetyOff = SafetyBox.IsChecked != true
+            };
+            return o;
+        }
 
         public SettingsWindow(App app)
         {
@@ -29,6 +46,13 @@ namespace GeminiLauncher
             foreach (var m in Settings.KnownModels) ModelBox.Items.Add(m);
             ModelBox.Text = S.Model;
             InstantBox.IsChecked = S.InstantAnswers;
+            foreach (var (label, val) in Thinkings) ThinkingBox.Items.Add(new ComboBoxItem { Content = label, Tag = val });
+            ThinkingBox.SelectedIndex = Math.Max(0, Array.FindIndex(Thinkings, t => t.val == S.Thinking));
+            ToolSearchBox.IsChecked = S.ToolSearch;
+            ToolMapsBox.IsChecked = S.ToolMaps;
+            ToolUrlBox.IsChecked = S.ToolUrlContext;
+            LocationBox.IsChecked = S.UseLocation;
+            SafetyBox.IsChecked = !S.SafetyOff;
             foreach (var d in Delays) DelayBox.Items.Add(new ComboBoxItem { Content = d + " ms", Tag = d });
             int di = Array.IndexOf(Delays, S.InstantDelayMs);
             DelayBox.SelectedIndex = di >= 0 ? di : 2;
@@ -54,11 +78,26 @@ namespace GeminiLauncher
             var model = (ModelBox.Text ?? "").Trim();
             if (key.Length == 0) { TestResult.Text = "Paste your API key first."; return; }
             TestResult.Text = "Testing " + model + " with Google Search…";
-            var ans = Gemini.Ask(key, model, "What is today's date? Answer in one short sentence. (test " + DateTime.Now.Ticks + ")", CancellationToken.None);
+            var opt = BuildOptions(model);
+            var ans = Gemini.Ask(key, opt, "What is today's date? Answer in one short sentence. (test " + DateTime.Now.Ticks + ")", CancellationToken.None);
             var sw = Stopwatch.StartNew();
             while (!ans.Done && sw.Elapsed.TotalSeconds < 45) await Task.Delay(150);
-            if (ans.Error != null) TestResult.Text = "✗ " + ans.Error;
-            else TestResult.Text = "✓ Works (" + sw.Elapsed.TotalSeconds.ToString("0.0") + " s): " + Markdown.ToPlain(ans.Snapshot()).Trim();
+            if (ans.Error != null) { TestResult.Text = "✗ " + ans.Error; return; }
+            var u = ans.Used ?? opt;
+            var tools = new System.Collections.Generic.List<string>();
+            if (u.Search) tools.Add("Google Search");
+            if (u.Maps) tools.Add("Google Maps");
+            if (u.UrlContext) tools.Add("URL context");
+            var dropped = new System.Collections.Generic.List<string>();
+            if (opt.Search && !u.Search) dropped.Add("Google Search");
+            if (opt.Maps && !u.Maps) dropped.Add("Google Maps");
+            if (opt.UrlContext && !u.UrlContext) dropped.Add("URL context");
+            if (opt.SafetyOff && !u.SafetyOff) dropped.Add("safety OFF");
+            if (opt.Thinking != u.Thinking) dropped.Add("thinking " + opt.Thinking + " (used " + u.Thinking + ")");
+            TestResult.Text = "✓ Works in " + sw.Elapsed.TotalSeconds.ToString("0.0") + " s with " + (tools.Count > 0 ? string.Join(", ", tools) : "no tools") +
+                              ", thinking " + u.Thinking + ", safety filters " + (u.SafetyOff ? "off" : "default") + "." +
+                              (dropped.Count > 0 ? "\n⚠ This model didn't accept: " + string.Join(", ", dropped) + "." : "") +
+                              "\n" + Markdown.ToPlain(ans.Snapshot()).Trim();
         }
 
         void NativeStart_Click(object sender, RoutedEventArgs e) => App.OpenNativeStart();
@@ -91,6 +130,13 @@ namespace GeminiLauncher
             var model = (ModelBox.Text ?? "").Trim();
             if (model.Length > 0) S.Model = model;
             S.InstantAnswers = InstantBox.IsChecked == true;
+            S.Thinking = SelectedThinking;
+            S.ToolSearch = ToolSearchBox.IsChecked == true;
+            S.ToolMaps = ToolMapsBox.IsChecked == true;
+            S.ToolUrlContext = ToolUrlBox.IsChecked == true;
+            S.UseLocation = LocationBox.IsChecked == true;
+            S.SafetyOff = SafetyBox.IsChecked != true;
+            Location.Enable(S.ToolMaps && S.UseLocation);
             if (DelayBox.SelectedItem is ComboBoxItem ci) S.InstantDelayMs = (int)ci.Tag;
             S.TakeOverWinKey = WinKeyBox.IsChecked == true;
             S.TakeOverStartButton = StartBtnBox.IsChecked == true;

@@ -68,6 +68,7 @@ namespace GeminiLauncher
             AppIndex.LoadCache();
             AppIndex.RefreshAsync(force: true);
             Http.Warmup();
+            Location.Enable(Settings.ToolMaps && Settings.UseLocation);
 
             Launcher = new MainWindow();
             new WindowInteropHelper(Launcher).EnsureHandle();   // create HWND now so first open is instant
@@ -180,7 +181,7 @@ namespace GeminiLauncher
             if (now - _lastToggle < 150) return; // debounce double events
             _lastToggle = now;
 
-            if (w.IsVisible)
+            if (w.IsVisible && !w.IsHiding)
             {
                 if (fromHook) { HideLauncher(); return; }
                 ForceForeground(w);
@@ -188,23 +189,27 @@ namespace GeminiLauncher
                 return;
             }
             _trimTimer?.Stop();
+            if (w.IsVisible && w.IsHiding)
+            {
+                // re-opened while closing: reverse the slide
+                ForceForeground(w);
+                w.FocusSearch();
+                w.SlideIn();
+                return;
+            }
             AppIndex.RefreshAsync();
             w.PrepareForShow();
             w.Show();
             ForceForeground(w);
             w.FocusSearch();
-            w.AnimateIn();
-            // correct position once WPF has applied the target monitor's DPI
-            w.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(w.Position));
+            w.SlideIn();
         }
 
         public void HideLauncher()
         {
             var w = Launcher;
-            if (w == null || !w.IsVisible) return;
-            w.Hide();
-            _trimTimer?.Stop();
-            _trimTimer?.Start();
+            if (w == null || !w.IsVisible || w.IsHiding) return;
+            w.SlideOut(() => { _trimTimer?.Stop(); _trimTimer?.Start(); });
         }
 
         static void ForceForeground(Window w)

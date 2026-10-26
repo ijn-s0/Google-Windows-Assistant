@@ -24,6 +24,10 @@ namespace GeminiLauncher
         public string ApiKey = "";
         public string Model = "gemini-3.5-flash-lite";
         public bool InstantAnswers = true;
+        public string Thinking = "medium";
+        public bool ToolSearch = true, ToolMaps = true, ToolUrlContext = true;
+        public bool SafetyOff = true;
+        public bool UseLocation = false;
         public int InstantDelayMs = 900;
         public bool TakeOverWinKey = true;
         public bool TakeOverStartButton = true;
@@ -62,6 +66,12 @@ namespace GeminiLauncher
                 s.ApiKey = Unprotect(o.Str("apiKey")) ?? "";
                 s.Model = o.Str("model") ?? s.Model;
                 s.InstantAnswers = o.Bool("instantAnswers", s.InstantAnswers);
+                s.Thinking = o.Str("thinking") ?? s.Thinking;
+                s.ToolSearch = o.Bool("toolSearch", s.ToolSearch);
+                s.ToolMaps = o.Bool("toolMaps", s.ToolMaps);
+                s.ToolUrlContext = o.Bool("toolUrlContext", s.ToolUrlContext);
+                s.SafetyOff = o.Bool("safetyOff", s.SafetyOff);
+                s.UseLocation = o.Bool("useLocation", s.UseLocation);
                 s.InstantDelayMs = (int)o.Num("instantDelayMs", s.InstantDelayMs);
                 s.TakeOverWinKey = o.Bool("takeOverWinKey", s.TakeOverWinKey);
                 s.TakeOverStartButton = o.Bool("takeOverStartButton", s.TakeOverStartButton);
@@ -92,6 +102,12 @@ namespace GeminiLauncher
                     ["apiKey"] = Protect(ApiKey),
                     ["model"] = Model,
                     ["instantAnswers"] = InstantAnswers,
+                    ["thinking"] = Thinking,
+                    ["toolSearch"] = ToolSearch,
+                    ["toolMaps"] = ToolMaps,
+                    ["toolUrlContext"] = ToolUrlContext,
+                    ["safetyOff"] = SafetyOff,
+                    ["useLocation"] = UseLocation,
                     ["instantDelayMs"] = InstantDelayMs,
                     ["takeOverWinKey"] = TakeOverWinKey,
                     ["takeOverStartButton"] = TakeOverStartButton,
@@ -111,6 +127,17 @@ namespace GeminiLauncher
                 else File.Move(tmp, FilePath);
             }
             catch { }
+        }
+
+        public GeminiOptions GeminiOptions()
+        {
+            var o = new GeminiOptions
+            {
+                Model = Model, Thinking = Thinking, Search = ToolSearch, Maps = ToolMaps, UrlContext = ToolUrlContext, SafetyOff = SafetyOff
+            };
+            if (ToolMaps && UseLocation && Location.Current is System.Device.Location.GeoCoordinate c && !c.IsUnknown)
+            { o.Lat = Math.Round(c.Latitude, 3); o.Lng = Math.Round(c.Longitude, 3); }
+            return o;
         }
 
         public void AddRecentSearch(string q)

@@ -47,14 +47,15 @@ namespace GeminiLauncher
             PreviewTextInput += OnTextInput;
             Closing += (s, e) => { if (!App.IsExiting) { e.Cancel = true; AppRef.HideLauncher(); } };
             Deactivated += (s, e) => { if (!SuppressHide && IsVisible) AppRef.HideLauncher(); };
+            StateChanged += (s, e) => { if (WindowState != WindowState.Normal) WindowState = WindowState.Normal; };
             SourceInitialized += (s, e) =>
             {
                 // Remove the system menu so DWM doesn't draw a caption close button on the glass frame.
                 var h = new WindowInteropHelper(this).Handle;
                 Native.SetWindowLong(h, -16 /*GWL_STYLE*/, Native.GetWindowLong(h, -16) & ~0x00080000 /*WS_SYSMENU*/);
-                Theme.ApplyBackdrop(this);
+                Theme.ApplyBackdrop(this, true, 3, popup: true);
             };
-            Theme.Changed += () => { Theme.ApplyBackdrop(this); if (_bound != null) RenderAnswer(); };
+            Theme.Changed += () => { Theme.ApplyBackdrop(this, true, 3, popup: true); if (_bound != null) RenderAnswer(); };
             _instantTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
             _instantTimer.Tick += (s, e) => { _instantTimer.Stop(); MaybeInstantAnswer(); };
             AppIndex.Updated += () => Dispatcher.BeginInvoke(new Action(() =>
@@ -82,12 +83,28 @@ namespace GeminiLauncher
             Position();
         }
 
+        // Geometry of the monitor we open on (physical pixels)
+        System.Drawing.Rectangle _wa, _bounds;
+        bool _fromTop;
+        int _margin = 12;
+        IntPtr _tray;
+        bool _animating, _hiding;
+        readonly System.Diagnostics.Stopwatch _sw = new System.Diagnostics.Stopwatch();
+        int _fromY, _durMs;
+        bool _slideOut;
+        Action _onSlideDone;
+        public bool IsHiding => _hiding;
+
+        IntPtr Hwnd => new WindowInteropHelper(this).EnsureHandle();
+
+        /// <summary>Picks the monitor under the cursor and parks the window just below its taskbar, ready to slide up.</summary>
         public void Position()
         {
-            var hwnd = new WindowInteropHelper(this).EnsureHandle();
+            var hwnd = Hwnd;
             Native.GetCursorPos(out var pt);
             var scr = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point(pt.x, pt.y));
-            var wa = scr.WorkingArea;
+            _wa = scr.WorkingArea; _bounds = scr.Bounds;
+            _fromTop = _wa.Top > _bounds.Top && _wa.Bottom == _bounds.Bottom;   // taskbar at the top
             double scale = 1;
             try
             {
@@ -95,21 +112,90 @@ namespace GeminiLauncher
                 if (Native.GetDpiForMonitor(mon, 0, out uint dx, out uint dy) == 0) scale = dx / 96.0;
             }
             catch { }
+            _margin = (int)Math.Round(12 * scale);
+            _tray = FindTray(_bounds);
             int w = (int)Math.Round(Width * scale), h = (int)Math.Round(Height * scale);
-            if (Native.GetWindowRect(hwnd, out var r) && IsVisible) { w = r.right - r.left; h = r.bottom - r.top; }
-            int margin = (int)(12 * scale);
-            int x = wa.Left + (wa.Width - w) / 2;
-            int y = wa.Bottom - h - margin;
-            if (wa.Top > scr.Bounds.Top) y = wa.Top + margin;          // taskbar at top
-            if (y < wa.Top) y = wa.Top;
-            Native.SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
+            Native.SetWindowPos(hwnd, IntPtr.Zero, CenterX(w), OffY(h), 0, 0, Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
         }
 
-        public void AnimateIn()
+        int CenterX(int w) => _wa.Left + (_wa.Width - w) / 2;
+        int TargetY(int h) => _fromTop ? _wa.Top + _margin : _wa.Bottom - h - _margin;
+        int OffY(int h) => _fromTop ? _bounds.Top - h : _bounds.Bottom;   // hidden behind the taskbar / below the screen edge
+
+        static IntPtr FindTray(System.Drawing.Rectangle screen)
         {
-            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-            RootShift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(26, 0, TimeSpan.FromMilliseconds(200)) { EasingFunction = ease });
-            Root.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140)));
+            var list = new List<IntPtr>();
+            var main = Native.FindWindow("Shell_TrayWnd", null);
+            if (main != IntPtr.Zero) list.Add(main);
+            IntPtr sec = IntPtr.Zero;
+            while ((sec = Native.FindWindowEx(IntPtr.Zero, sec, "Shell_SecondaryTrayWnd", null)) != IntPtr.Zero) list.Add(sec);
+            foreach (var t in list)
+                if (Native.GetWindowRect(t, out var r))
+                {
+                    int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+                    if (screen.Contains(cx, cy)) return t;
+                }
+            return IntPtr.Zero;
+        }
+
+        /// <summary>Start-menu style entrance: the whole window (glass included) slides up from behind the taskbar.</summary>
+        public void SlideIn()
+        {
+            Root.BeginAnimation(OpacityProperty, null); Root.Opacity = 1;
+            Native.GetWindowRect(Hwnd, out var r);
+            int h = r.bottom - r.top;
+            _fromY = (_animating || _hiding) ? r.top : OffY(h);
+            _hiding = false;
+            StartSlide(false, SystemParameters.ClientAreaAnimation ? 300 : 0, null);
+        }
+
+        /// <summary>Start-menu style exit: quick slide back down behind the taskbar, then hide.</summary>
+        public void SlideOut(Action done)
+        {
+            if (_hiding) return;
+            _hiding = true;
+            Native.GetWindowRect(Hwnd, out var r);
+            _fromY = r.top;
+            StartSlide(true, SystemParameters.ClientAreaAnimation ? 160 : 0, () =>
+            {
+                _hiding = false;
+                Hide();
+                done?.Invoke();
+            });
+        }
+
+        void StartSlide(bool outwards, int ms, Action done)
+        {
+            _slideOut = outwards;
+            _durMs = ms;
+            _onSlideDone = done;
+            _sw.Restart();
+            if (!_animating) { _animating = true; CompositionTarget.Rendering += OnSlideFrame; }
+            OnSlideFrame(null, EventArgs.Empty);
+        }
+
+        void OnSlideFrame(object sender, EventArgs e)
+        {
+            var hwnd = Hwnd;
+            if (!Native.GetWindowRect(hwnd, out var r)) return;
+            int w = r.right - r.left, h = r.bottom - r.top;
+            double p = _durMs <= 0 ? 1 : Math.Min(1, _sw.Elapsed.TotalMilliseconds / _durMs);
+            int to = _slideOut ? OffY(h) : TargetY(h);
+            // Enter: strong deceleration like Start (quartic ease-out). Exit: accelerate away (cubic ease-in).
+            double k = _slideOut ? p * p * p : 1 - Math.Pow(1 - p, 4);
+            int y = (int)Math.Round(_fromY + (to - _fromY) * k);
+            // Keep the window just under the taskbar in Z-order so it emerges from behind it.
+            if (_tray != IntPtr.Zero)
+                Native.SetWindowPos(hwnd, _tray, CenterX(w), y, 0, 0, Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+            else
+                Native.SetWindowPos(hwnd, IntPtr.Zero, CenterX(w), y, 0, 0, Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
+            if (p >= 1)
+            {
+                CompositionTarget.Rendering -= OnSlideFrame;
+                _animating = false;
+                var d = _onSlideDone; _onSlideDone = null;
+                d?.Invoke();
+            }
         }
 
         public void SetQuery(string q)
@@ -471,12 +557,13 @@ namespace GeminiLauncher
                 return;
             }
 
-            var ans = Gemini.Cached(S.Model, query);
+            var opt = S.GeminiOptions();
+            var ans = Gemini.Cached(opt, query);
             if (ans == null && start)
             {
                 _answerCts?.Cancel();
                 _answerCts = new CancellationTokenSource();
-                ans = Gemini.Ask(S.ApiKey, S.Model, query, _answerCts.Token);
+                ans = Gemini.Ask(S.ApiKey, opt, query, _answerCts.Token);
             }
             if (ans == null)
             {
@@ -532,10 +619,11 @@ namespace GeminiLauncher
         {
             var a = _bound;
             if (a == null) return;
-            string text; List<GeminiSource> sources; List<string> queries; List<string> urls;
+            string text; List<GeminiSource> sources, places; List<string> queries; List<string> urls;
             lock (a)
             {
                 text = a.Text.ToString();
+                places = a.Places.ToList();
                 sources = a.Sources.ToList();
                 queries = a.SearchQueries.ToList();
                 urls = a.UrlsRead.ToList();
@@ -556,11 +644,30 @@ namespace GeminiLauncher
 
             Markdown.Render(AnswerDoc, done ? text : text + " ▍", Res("Fg1"), Res("Fg2"), Res("AccentText"), Res("ChipBg"));
             if (!done) AnswerStatus.Text = text.Length == 0 ? (urls.Count > 0 ? "Reading page…" : "Searching Google…") : "Writing…";
-            else AnswerStatus.Text = sources.Count > 0 ? "Grounded in Google Search" : (urls.Count > 0 ? "From the page you linked" : "");
+            else
+            {
+                var parts = new List<string>();
+                if (sources.Count > 0) parts.Add("Google Search");
+                if (places.Count > 0) parts.Add("Google Maps");
+                if (urls.Count > 0) parts.Add("the page you linked");
+                AnswerStatus.Text = parts.Count > 0 ? "Grounded in " + string.Join(" + ", parts) : "";
+            }
             SetSpinning(!done);
             CopyAnswer.Visibility = done && text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
             SourceChips.Children.Clear();
+            foreach (var pl in places.Take(6))
+            {
+                // Google Maps attribution: source name + "Google Maps", linked to the place.
+                var b = new Button { Style = (Style)FindResource("ChipButton"), Focusable = false, Tag = pl.Uri, ToolTip = pl.Title + " on Google Maps" };
+                var sp = new StackPanel { Orientation = Orientation.Horizontal };
+                sp.Children.Add(new System.Windows.Shapes.Path { Data = Glyphs.Pin, Stroke = Res("AccentText"), StrokeThickness = 1.3, Stretch = Stretch.Uniform, Width = 9, Height = 11, Margin = new Thickness(0, 0, 6, 0) });
+                sp.Children.Add(new TextBlock { Text = pl.Title, MaxWidth = 180, TextTrimming = TextTrimming.CharacterEllipsis });
+                sp.Children.Add(new TextBlock { Text = "  Google Maps", Foreground = Res("Fg3"), TextWrapping = TextWrapping.NoWrap });
+                b.Content = sp;
+                b.Click += (o, e) => { Launcher.OpenUrl((string)((Button)o).Tag); AppRef.HideLauncher(); };
+                SourceChips.Children.Add(b);
+            }
             foreach (var s in sources.Take(8))
             {
                 var b = new Button { Style = (Style)FindResource("ChipButton"), Content = s.Title, ToolTip = s.Title, Focusable = false, Tag = s.Uri };
@@ -760,7 +867,7 @@ namespace GeminiLauncher
                 case ItemKind.Gemini:
                     {
                         S.AddRecentSearch(it.Target);
-                        var a = Gemini.Cached(S.Model, it.Target);
+                        var a = Gemini.Cached(S.GeminiOptions(), it.Target);
                         if (a != null && a.Done && _bound == a && AnswerPanel.Visibility == Visibility.Visible)
                         {
                             Launcher.GoogleSearch(it.Target); // Enter again on a finished answer -> full Google results

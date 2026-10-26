@@ -40,6 +40,11 @@ jobs:
           }
           $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
           New-Item -Force $key | Out-Null
+          # Reproduce "Show accent color on title bars" (caused a colored strip at the top before)
+          New-Item -Force 'HKCU:\Software\Microsoft\Windows\DWM' | Out-Null
+          Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\DWM' ColorPrevalence 1 -Type DWord
+          Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\DWM' AccentColor 0xFFD77800 -Type DWord
+          Set-ItemProperty $key ColorPrevalence 1 -Type DWord
           foreach ($mode in @(0, 1)) {
             Set-ItemProperty $key SystemUsesLightTheme $mode -Type DWord
             Set-ItemProperty $key AppsUseLightTheme $mode -Type DWord
@@ -51,6 +56,33 @@ jobs:
             RunShot "calc-$m" @('--portable', '--query', '"(12+8)*3"')
           }
           RunShot "settings" @('--portable')
+          # Animation: burst of frames while opening, then press Esc twice (clear+close) to see the slide-down
+          Set-ItemProperty $key SystemUsesLightTheme 0 -Type DWord; Set-ItemProperty $key AppsUseLightTheme 0 -Type DWord
+          New-Item -ItemType Directory -Force shots/anim | Out-Null
+          $enc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+          $ep = New-Object System.Drawing.Imaging.EncoderParameters 1
+          $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), 60L
+          function Burst($prefix, $count) {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            for ($i = 0; $i -lt $count; $i++) {
+              $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+              $g = [System.Drawing.Graphics]::FromImage($bmp)
+              $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+              $small = New-Object System.Drawing.Bitmap $bmp, ([int]($b.Width/2)), ([int]($b.Height/2))
+              $small.Save(("shots/anim/{0}-{1:D3}-{2}ms.jpg" -f $prefix, $i, $sw.ElapsedMilliseconds), $enc, $ep)
+              $small.Dispose(); $g.Dispose(); $bmp.Dispose()
+            }
+          }
+          $p = Start-Process $exe -ArgumentList @('--portable', '--show') -PassThru
+          Burst "open" 90
+          Start-Sleep 2
+          $ws = New-Object -ComObject WScript.Shell
+          $null = $ws.AppActivate($p.Id)
+          Start-Sleep -Milliseconds 300
+          [System.Windows.Forms.SendKeys]::SendWait("{ESC}")
+          Burst "close" 25
+          Stop-Process $p -Force -ErrorAction SilentlyContinue
           $p = Start-Process $exe -ArgumentList @('--portable','--background') -PassThru
           Start-Sleep 40
           "idle-background: WorkingSet={0:N0} KB  Private={1:N0} KB" -f ($p.WorkingSet64/1KB), ($p.PrivateMemorySize64/1KB) | Write-Host

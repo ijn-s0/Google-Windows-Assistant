@@ -82,6 +82,17 @@ namespace GeminiLauncher
 
     public class GeminiSource { public string Title, Uri; }
 
+    public class GeminiOptions
+    {
+        public string Model = "gemini-3.5-flash-lite";
+        public string Thinking = "medium";   // default | minimal | low | medium | high
+        public bool Search = true, Maps = true, UrlContext = true;
+        public bool SafetyOff = true, IncludeJailbreak = true;
+        public double? Lat, Lng;
+        public string Key => Model + "|" + Thinking + "|" + Search + Maps + UrlContext + SafetyOff;
+        public GeminiOptions Clone() => (GeminiOptions)MemberwiseClone();
+    }
+
     public class GeminiAnswer
     {
         public string Query;
@@ -89,6 +100,9 @@ namespace GeminiLauncher
         public List<GeminiSource> Sources = new List<GeminiSource>();
         public List<string> SearchQueries = new List<string>();
         public List<string> UrlsRead = new List<string>();
+        public List<GeminiSource> Places = new List<GeminiSource>();
+        public List<string> Notes = new List<string>();
+        public GeminiOptions Used;
         public volatile bool Done;
         public string Snapshot() { lock (this) return Text.ToString(); }
         public string Error;
@@ -104,12 +118,12 @@ namespace GeminiLauncher
     {
         static readonly Dictionary<string, GeminiAnswer> Cache = new Dictionary<string, GeminiAnswer>(StringComparer.OrdinalIgnoreCase);
 
-        public static GeminiAnswer Cached(string model, string q)
+        public static GeminiAnswer Cached(GeminiOptions opt, string q)
         {
-            lock (Cache) return Cache.TryGetValue(model + "|" + q.Trim(), out var a) && a.Error == null ? a : null;
+            lock (Cache) return Cache.TryGetValue(opt.Key + "|" + q.Trim(), out var a) && a.Error == null ? a : null;
         }
 
-        static string SystemPrompt()
+        static string SystemPrompt(GeminiOptions o)
         {
             var now = DateTime.Now;
             string region = "";
@@ -119,7 +133,10 @@ namespace GeminiLauncher
                 "Current local date/time: " + now.ToString("dddd, MMMM d, yyyy h:mm tt", CultureInfo.InvariantCulture) +
                 " (" + TimeZoneInfo.Local.DisplayName + "). User region: " + region + ".\n" +
                 "Rules:\n" +
-                "- Use Google Search for anything that could be time-sensitive or factual. If the query contains URLs, read them with the URL context tool.\n" +
+                (o.Search ? "- Use Google Search for anything that could be time-sensitive or factual.\n" : "") +
+                (o.UrlContext ? "- If the query contains URLs, read them with the URL context tool.\n" : "") +
+                (o.Maps ? "- For places, businesses, directions, opening hours or anything \"near me\", use Google Maps." +
+                          (o.Lat.HasValue ? " The user's approximate location is " + o.Lat.Value.ToString("0.###", CultureInfo.InvariantCulture) + ", " + o.Lng.Value.ToString("0.###", CultureInfo.InvariantCulture) + "." : "") + "\n" : "") +
                 "- Start with the direct answer in one or two sentences, with the key fact in **bold**.\n" +
                 "- Then, only if useful, up to 5 short bullet points. No preamble, no closing remarks, no follow-up offers.\n" +
                 "- If the query is just a website or brand name, give its official URL and a one-line description.\n" +
@@ -128,39 +145,74 @@ namespace GeminiLauncher
                 "- Reply in the same language as the query.";
         }
 
-        static object ThinkingConfig(string model)
+        static object ThinkingConfig(string model, string level)
         {
             var m = model.ToLowerInvariant();
-            if (m.StartsWith("gemini-2.5"))
-                return m.Contains("pro") ? null : new Dictionary<string, object> { ["thinkingBudget"] = 0 };
-            if (m.Contains("flash-lite")) return new Dictionary<string, object> { ["thinkingLevel"] = "minimal" };
-            return new Dictionary<string, object> { ["thinkingLevel"] = "low" };
+            level = (level ?? "medium").ToLowerInvariant();
+            if (level == "default") return null;
+            if (m.StartsWith("gemini-2."))
+            {
+                // Gemini 2.5 uses token budgets instead of levels
+                int budget = level == "minimal" ? 0 : level == "low" ? 1024 : level == "medium" ? 4096 : 16384;
+                if (m.Contains("pro") && budget < 128) budget = 128;
+                return new Dictionary<string, object> { ["thinkingBudget"] = budget };
+            }
+            return new Dictionary<string, object> { ["thinkingLevel"] = level.ToUpperInvariant() };
         }
 
-        public static GeminiAnswer Ask(string apiKey, string model, string query, CancellationToken ct)
+        static readonly string[] SafetyCategories =
         {
-            var key = model + "|" + query.Trim();
+            "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "HARM_CATEGORY_DANGEROUS_CONTENT", "HARM_CATEGORY_JAILBREAK"
+        };
+
+        public static GeminiAnswer Ask(string apiKey, GeminiOptions opt, string query, CancellationToken ct)
+        {
+            var key = opt.Key + "|" + query.Trim();
             lock (Cache)
             {
                 if (Cache.TryGetValue(key, out var existing) && existing.Error == null) return existing;
             }
             var ans = new GeminiAnswer { Query = query.Trim() };
             lock (Cache) { if (Cache.Count > 100) Cache.Clear(); Cache[key] = ans; }
-            Task.Run(() => RunAsync(apiKey, model, ans, ct, true));
+            Task.Run(() => RunAsync(apiKey, opt.Clone(), ans, ct, 0));
             return ans;
         }
 
-        static async Task RunAsync(string apiKey, string model, GeminiAnswer ans, CancellationToken ct, bool withThinkingCfg)
+        /// <summary>Some models reject some combinations (e.g. a tool or a safety category).
+        /// On HTTP 400 we drop the most likely culprit and retry, instead of failing.</summary>
+        static bool Degrade(GeminiOptions o, string msg)
+        {
+            var m = (msg ?? "").ToLowerInvariant();
+            if (o.Thinking != "default" && m.Contains("thinking")) { o.Thinking = o.Thinking == "minimal" ? "low" : "default"; return true; }
+            if (o.SafetyOff && o.IncludeJailbreak && (m.Contains("jailbreak") || m.Contains("category") || m.Contains("safety") || m.Contains("threshold"))) { o.IncludeJailbreak = false; return true; }
+            if (o.SafetyOff && (m.Contains("category") || m.Contains("safety") || m.Contains("threshold"))) { o.SafetyOff = false; return true; }
+            if (o.Maps && (m.Contains("map") || m.Contains("latlng") || m.Contains("retrieval"))) { o.Maps = false; return true; }
+            if (o.UrlContext && m.Contains("url")) { o.UrlContext = false; return true; }
+            if (m.Contains("tool") || m.Contains("not supported") || m.Contains("unsupported") || m.Contains("combin"))
+            {
+                if (o.Maps) { o.Maps = false; return true; }
+                if (o.UrlContext && o.Search) { o.UrlContext = false; return true; }
+            }
+            return false;
+        }
+
+        static async Task RunAsync(string apiKey, GeminiOptions o, GeminiAnswer ans, CancellationToken ct, int attempt)
         {
             try
             {
-                var gen = new Dictionary<string, object> { ["temperature"] = 0.4, ["maxOutputTokens"] = 1500 };
-                var tc = withThinkingCfg ? ThinkingConfig(model) : null;
+                var gen = new Dictionary<string, object> { ["temperature"] = 0.4, ["maxOutputTokens"] = 8192 };
+                var tc = ThinkingConfig(o.Model, o.Thinking);
                 if (tc != null) gen["thinkingConfig"] = tc;
+
+                var tools = new List<object>();
+                if (o.Search) tools.Add(new Dictionary<string, object> { ["googleSearch"] = new Dictionary<string, object>() });
+                if (o.Maps) tools.Add(new Dictionary<string, object> { ["googleMaps"] = new Dictionary<string, object>() });
+                if (o.UrlContext) tools.Add(new Dictionary<string, object> { ["urlContext"] = new Dictionary<string, object>() });
 
                 var body = new Dictionary<string, object>
                 {
-                    ["systemInstruction"] = new Dictionary<string, object> { ["parts"] = new List<object> { new Dictionary<string, object> { ["text"] = SystemPrompt() } } },
+                    ["systemInstruction"] = new Dictionary<string, object> { ["parts"] = new List<object> { new Dictionary<string, object> { ["text"] = SystemPrompt(o) } } },
                     ["contents"] = new List<object>
                     {
                         new Dictionary<string, object>
@@ -169,15 +221,21 @@ namespace GeminiLauncher
                             ["parts"] = new List<object> { new Dictionary<string, object> { ["text"] = ans.Query } }
                         }
                     },
-                    ["tools"] = new List<object>
-                    {
-                        new Dictionary<string, object> { ["googleSearch"] = new Dictionary<string, object>() },
-                        new Dictionary<string, object> { ["urlContext"] = new Dictionary<string, object>() },
-                    },
                     ["generationConfig"] = gen,
                 };
+                if (tools.Count > 0) body["tools"] = tools;
+                if (o.SafetyOff)
+                    body["safetySettings"] = SafetyCategories.Where(c => o.IncludeJailbreak || c != "HARM_CATEGORY_JAILBREAK")
+                        .Select(c => (object)new Dictionary<string, object> { ["category"] = c, ["threshold"] = "OFF" }).ToList();
+                if (o.Maps)
+                {
+                    var rc = new Dictionary<string, object> { ["languageCode"] = CultureInfo.CurrentUICulture.Name };
+                    if (o.Lat.HasValue && o.Lng.HasValue)
+                        rc["latLng"] = new Dictionary<string, object> { ["latitude"] = o.Lat.Value, ["longitude"] = o.Lng.Value };
+                    body["toolConfig"] = new Dictionary<string, object> { ["retrievalConfig"] = rc };
+                }
 
-                var url = "https://generativelanguage.googleapis.com/v1beta/models/" + Uri.EscapeDataString(model) + ":streamGenerateContent?alt=sse";
+                var url = "https://generativelanguage.googleapis.com/v1beta/models/" + Uri.EscapeDataString(o.Model) + ":streamGenerateContent?alt=sse";
                 var req = new HttpRequestMessage(HttpMethod.Post, url)
                 {
                     Content = new StringContent(Json.Write(body), Encoding.UTF8, "application/json")
@@ -191,15 +249,17 @@ namespace GeminiLauncher
                         var err = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                         string msg = null;
                         try { msg = Json.Parse(err).Get("error").Str("message"); } catch { }
-                        if (withThinkingCfg && (int)resp.StatusCode == 400 && (msg ?? err).IndexOf("thinking", StringComparison.OrdinalIgnoreCase) >= 0)
+                        if ((int)resp.StatusCode == 400 && attempt < 6 && Degrade(o, msg ?? err))
                         {
-                            await RunAsync(apiKey, model, ans, ct, false).ConfigureAwait(false);
+                            lock (ans) ans.Notes.Add(msg ?? err);
+                            await RunAsync(apiKey, o, ans, ct, attempt + 1).ConfigureAwait(false);
                             return;
                         }
                         ans.Error = "Gemini API error " + (int)resp.StatusCode + ": " + (msg ?? err);
                         ans.Done = true; ans.RaiseChanged();
                         return;
                     }
+                    lock (ans) ans.Used = o;
 
                     using (var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false))
                     using (var reader = new StreamReader(stream, Encoding.UTF8))
@@ -251,6 +311,14 @@ namespace GeminiLauncher
             {
                 foreach (var ch in gm.Get("groundingChunks").Arr())
                 {
+                    var map = ch.Get("maps");
+                    if (map != null)
+                    {
+                        var mu = map.Str("uri");
+                        var mt = map.Str("title") ?? "Place";
+                        if (mu != null && !ans.Places.Any(x => x.Uri == mu)) ans.Places.Add(new GeminiSource { Title = mt, Uri = mu });
+                        continue;
+                    }
                     var web = ch.Get("web");
                     var uri = web.Str("uri");
                     if (uri == null) continue;

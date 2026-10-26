@@ -161,7 +161,7 @@ namespace GeminiLauncher
         const int DWMSBT_NONE = 1, DWMSBT_TRANSIENTWINDOW = 3; // 3 = Acrylic (the flyout / Start material)
 
         /// <summary>Call from SourceInitialized and again when the theme changes.</summary>
-        public static void ApplyBackdrop(Window w, bool rounded = true, int backdrop = 3)
+        public static void ApplyBackdrop(Window w, bool rounded = true, int backdrop = 3, bool popup = false)
         {
             var hwnd = new WindowInteropHelper(w).Handle;
             if (hwnd == IntPtr.Zero) return;
@@ -173,6 +173,15 @@ namespace GeminiLauncher
             {
                 int corner = rounded ? 2 : 3; // DWMWCP_ROUND / ROUNDSMALL
                 DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, 4);
+                if (popup)
+                {
+                    // No title-bar color (removes the accent-colored strip when "Show accent color on title bars" is on)
+                    int none = unchecked((int)0xFFFFFFFE); // DWMWA_COLOR_NONE
+                    DwmSetWindowAttribute(hwnd, 35 /*DWMWA_CAPTION_COLOR*/, ref none, 4);
+                    // Subtle neutral border like Start, instead of the accent color
+                    int border = IsDark ? 0x00404040 : 0x00D6D6D6; // COLORREF 0x00BBGGRR
+                    DwmSetWindowAttribute(hwnd, 34 /*DWMWA_BORDER_COLOR*/, ref border, 4);
+                }
             }
 
             if (!Transparency)
