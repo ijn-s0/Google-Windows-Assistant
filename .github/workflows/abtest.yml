@@ -32,38 +32,60 @@ jobs:
           $info
       - name: Build NEW code
         run: dotnet build src/GeminiLauncher.csproj -c Release
-      - name: Build OLD code (bec8170) in a worktree
-        shell: pwsh
-        run: |
-          git fetch origin bec8170
-          git worktree add ..\old bec8170
-          dotnet build ..\old\src\GeminiLauncher.csproj -c Release
-      - name: A/B launch and process counts
+      - name: NEW launch test
+        if: always()
         shell: pwsh
         run: |
           $out = New-Object System.Collections.Generic.List[string]
           function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
-          function CountWv($exe, $tag) {
+          $exe = "src\bin\Release\net48\GeminiLauncher.exe"
+          if (Test-Path $exe) {
             Remove-Item "$env:APPDATA\GeminiLauncher\error.log" -ErrorAction SilentlyContinue
             $p = Start-Process $exe -ArgumentList @('--portable', '--query', '"weather vancouver"') -PassThru
             Start-Sleep 20
             $n = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count
-            Log-Line "$tag : msedgewebview2 count after 20s = $n; exited=$($p.HasExited)"
+            Log-Line "NEW : msedgewebview2 count after 20s = $n; exited=$($p.HasExited)"
             $log = "$env:APPDATA\GeminiLauncher\error.log"
-            if (Test-Path $log) { Log-Line "--- $tag error.log ---"; Get-Content $log | ForEach-Object { Log-Line $_ } }
+            if (Test-Path $log) { Log-Line "--- NEW error.log ---"; Get-Content $log | ForEach-Object { Log-Line $_ } }
             Stop-Process $p -Force -ErrorAction SilentlyContinue
             Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep 2
-          }
-          CountWv "src\bin\Release\net48\GeminiLauncher.exe" "NEW"
-          CountWv "..\old\src\bin\Release\net48\GeminiLauncher.exe" "OLD"
+          } else { Log-Line "NEW : exe not built" }
           New-Item -ItemType Directory -Force ab | Out-Null
+          $out | Set-Content ab\ab-result.txt
+      - uses: actions/checkout@v4
+        if: always()
+        with:
+          ref: bec8170
+          path: old
+      - name: Build OLD code (bec8170)
+        if: always()
+        continue-on-error: true
+        run: dotnet build old/src/GeminiLauncher.csproj -c Release
+      - name: OLD launch test
+        if: always()
+        shell: pwsh
+        run: |
+          $out = Get-Content ab\ab-result.txt
+          function Log-Line($s) { $s | Write-Host; $script:out.Add($s) }
+          $exe = "old\src\bin\Release\net48\GeminiLauncher.exe"
+          if (Test-Path $exe) {
+            Remove-Item "$env:APPDATA\GeminiLauncher\error.log" -ErrorAction SilentlyContinue
+            $p = Start-Process $exe -ArgumentList @('--portable', '--query', '"weather vancouver"') -PassThru
+            Start-Sleep 20
+            $n = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count
+            Log-Line "OLD : msedgewebview2 count after 20s = $n; exited=$($p.HasExited)"
+            $log = "$env:APPDATA\GeminiLauncher\error.log"
+            if (Test-Path $log) { Log-Line "--- OLD error.log ---"; Get-Content $log | ForEach-Object { Log-Line $_ } }
+            Stop-Process $p -Force -ErrorAction SilentlyContinue
+            Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
+          } else { Log-Line "OLD : exe not built" }
           $out | Set-Content ab\ab-result.txt
       - name: Push A/B result to a branch
         if: always()
         shell: pwsh
         run: |
           git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
-          git add -f ab/ab-result.txt
-          git commit -m "ab result" | Out-Null
+          git add -f ab || true
+          git commit -m "ab result" || true
           git push -f origin "HEAD:refs/heads/ci-ab-result"
