@@ -60,19 +60,11 @@ jobs:
           Run-One "src\bin\Release\net48\GeminiLauncher.exe" "NEW"
           Run-One "oldexe\GeminiLauncher.exe" "OLD"
           $out | Set-Content ab\ab-result.txt
-      - name: Publish result via Contents API
+      - name: Publish result to a branch
         if: always()
         shell: pwsh
         run: |
-          $repo = '${{ github.repository }}'
-          $branch = 'ci-ab-result'
-          $mainSha = (gh api repos/$repo/git/ref/heads/main --jq .object.sha)
-          gh api repos/$repo/git/refs -f ref=refs/heads/$branch -f sha=$mainSha 2>$null | Out-Null
-          $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes('ab\ab-result.txt'))
-          $existing = gh api repos/$repo/contents/ab/ab-result.txt?ref=$branch --jq .sha 2>$null
-          if ($existing) {
-            gh api repos/$repo/contents/ab/ab-result.txt -X PUT -f message="ab result" -f content=$b64 -f branch=$branch -f sha=$existing | Out-Null
-          } else {
-            gh api repos/$repo/contents/ab/ab-result.txt -X PUT -f message="ab result" -f content=$b64 -f branch=$branch | Out-Null
-          }
-          Write-Host "published to $branch"
+          git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
+          git add -f ab/ab-result.txt
+          git commit -m "ab result" | Out-Null
+          git push -f origin "HEAD:refs/heads/ci-ab-result"
