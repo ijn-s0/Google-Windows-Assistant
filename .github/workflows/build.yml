@@ -56,6 +56,9 @@ jobs:
             RunShot "calc-$m" @('--portable', '--query', '"(12+8)*3"')
           }
           RunShot "settings" @('--portable')
+          # Turn on "Animate controls and elements inside windows" (off by default on Windows Server)
+          Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint a, uint b, IntPtr c, uint d);'
+          [W.U]::SystemParametersInfo(0x1043, 0, [IntPtr]1, 3) | Out-Null
           # Animation: burst of frames while opening, then press Esc twice (clear+close) to see the slide-down
           Set-ItemProperty $key SystemUsesLightTheme 0 -Type DWord; Set-ItemProperty $key AppsUseLightTheme 0 -Type DWord
           New-Item -ItemType Directory -Force shots/anim | Out-Null
