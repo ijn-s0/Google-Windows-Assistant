@@ -1,4 +1,5 @@
 # Google Windows Assistant
+Originally "Gemini Launcher"
 
 A lightweight replacement for the Windows Start menu and search (Bing). Tap the **Windows key** or click **Start** on the taskbar, start typing, and you get:
 
