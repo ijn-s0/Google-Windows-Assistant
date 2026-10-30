@@ -1,0 +1,17 @@
+PASS  drag pin to new position  Pin Two, Pin Three, Pin One, Pin Four
+PASS  launcher still open after drag (no accidental click)  
+PASS  context menu opens with Move to front  
+PASS  Move to front  Pin Four, Pin Two, Pin Three, Pin One
+PASS  Alt+Shift+Right moves pin  Pin Two, Pin Four, Pin Three, Pin One
+PASS  X button on recent search  
+PASS  X removes recent search  beta test, gamma test, delta test
+PASS  next search backfills the list  
+PASS  launcher still open after X  
+PASS  Del removes focused recent search  gamma test, delta test
+PASS  recent file shown in Recommended  
+PASS  X removes Recommended file  file:C:\pt\report-draft.txt
+PASS  removed file stays hidden  
+PASS  click outside closes the launcher  
+PASS  order persisted after restart  Pin Two, Pin Four, Pin Three, Pin One
+PASS  removed file not shown after restart  
+PASS  apps listed above web results  
